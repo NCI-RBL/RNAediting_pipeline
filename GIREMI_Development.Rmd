@@ -1,0 +1,3115 @@
+
+
+```{r include=F ,echo=F,warning=F,message=FALSE}
+
+# example
+# chr1:59,692,533-59,692,616
+
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("TxDb.Mmusculus.UCSC.mm10.knownGene")
+# BiocManager::install('VariantAnnotation')
+# BiocManager::install("org.Mm.eg.db")
+# BiocManager::install("trackViewer")
+# install.packages("WhopGenome")
+
+    library(VariantAnnotation,quietly = T,verbose = F,warn.conflicts = F,logical.return = F)
+    library(GenomicRanges,quietly = T,verbose = F,warn.conflicts = F,logical.return = F)
+    #library(WhopGenome)
+    library(trackViewer)
+    library("pheatmap")
+
+    library(vcfR)
+    library(seqinr,quietly = T,verbose = F,warn.conflicts = F,logical.return = F)
+    library(ggplot2,quietly = T,verbose = F,warn.conflicts = F,logical.return = F)
+    library("viridis",quietly = T,verbose = F,warn.conflicts = F,logical.return = F)
+    library(edgeR,quietly = T,verbose = F)
+    library('GenomicFeatures',quietly = T,verbose = F,warn.conflicts = F,logical.return = F)
+    library('rtracklayer',quietly = T,verbose = F,warn.conflicts = F,logical.return = F)
+    #library(GeneStructureTools)
+    library(matrixStats,quietly = T,verbose = F,warn.conflicts = F,logical.return = F)
+    library(plyr,quietly = T,verbose = F,warn.conflicts = F,logical.return = F)
+    library(tidyr,quietly = T,verbose = F,warn.conflicts = F,logical.return = F)
+    library(fitdistrplus,quietly = T,verbose = F,warn.conflicts = F,logical.return = F)
+    library(stringr,quietly = T,verbose = F,warn.conflicts = F,logical.return = F)
+    library(data.table)
+    library(reshape)
+    library(knitr)
+
+```
+# Overview
+
+**Align using RASER:**  
+
+/data/RBL_NCI/Phil/RASER/public_release_v0.521/raser \
+-x /data/RBL_NCI/Phil/RASER/hg19_ensembl.ridx \
+-i1 /data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/FASTQ/FASTQ_HepG2_ADAR1/HepG2_ADAR_ENCLB012QRD.R1.fastq \
+-i2 /data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/FASTQ/FASTQ_HepG2_ADAR1/HepG2_ADAR_ENCLB012QRD.R2.fastq \
+-o /data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/HepG2_ADAR_ENCLB012QRD.sam \
+-m .05 \
+-b .03  
+
+## Test Data processing methods to identify SNPs    
+
+Example data provides total counts and editng counts for each ADAR1 sample.  
+Locations include RNAediting sites found from any RBP dataset in the ADAR1 batch.  
+SNP locations are limited to AtoG mutations from chr2 and have to have at least two reads covering the location.  
+    This means that not all the locations have reads with mutations at the SNP locations
+    and will not be identified in GIREMI analysis
+
+For these comparisons I will compare the counts from ADAR1 - sample 1 data.  
+    data will not be filtered according to requirements for GIREMI calculations to give as many points as possible to identify trends  
+    
+### Test Remove Duplicates method  
+
+**samtools rmdup:**
+
+samtools rmdup -S /data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/HepG2_ADAR_ENCLB012QRD.bam /data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/HepG2_ADAR_ENCLB012QRD.dedup.bam
+ 
+**samtools markdup:**  
+
+samtools markdup -r -t -@32 /data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/022520/HepG2_ADAR_ENCLB012QRD.fm.s.bam - | samtools sort > /data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/022520/HepG2_ADAR_ENCLB012QRD.fm.mkdedup.bam
+
+**Picard MarkDuplicates**  
+
+java -Xmx110g -jar $PICARDJARPATH/picard.jar MarkDuplicates \
+I=/data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/022520/HepG2_ADAR_ENCLB012QRD.n95.bam \
+O=/data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/022520/HepG2_ADAR_ENCLB012QRD.Picarddedup.bam \
+REMOVE_DUPLICATES=TRUE \
+TMP_DIR=/data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/Variation/GIREMI/GIREMI_redo_hg19/tmp \
+CREATE_INDEX=TRUE \
+VALIDATION_STRINGENCY=LENIENT \
+METRICS_FILE=/data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/022520/HepG2_ADAR_ENCLB012QRD.Picarddedup.txt
+ 
+### Test Variant Caller 
+
+**mpileup|bcftools:**
+
+samtools mpileup -uf /data/RBL_NCI/Phil/GIREMI_ref/Human/fdb.GENCODE.Gencode_human.release_19.GRCh37_p13_genome.fa \ /data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/HepG2_ADAR_ENCLB012QRD.dedup.bam | bcftools call -c -v | bcftools filter -i'DP>=5' > /data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/HepG2_ADAR_ENCLB012QRD.dedup.vcf \
+
+
+**Freebayes:**  
+ 
+ Check all positions
+ freebayes -f /data/RBL_NCI/Phil/Reference/GIREMI_ref/Human/fdb.GENCODE.Gencode_human.release_19.GRCh37_p13_genome.fa \
+ -C 1 -F 0 \
+ -t /data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/bed_OLchr2.bed \
+ /data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/HepG2_ADAR_ENCLB012QRD.dedup.bam >/data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/HepG2_ADAR_ENCLB012QRD.dedup_OLchr2.vcf
+ 
+ 
+## Test counts filters after calling SNPs  
+**(Lee et.al 2013)**
+Read count > 5    
+Ediing read count > 2   
+editing ratio > 10%  
+
+## Test SNV location filters    
+
+“dbSNP” filter: removes RDDs annotated as SNPs (dbSNP 135);  
+“splice site” filter: removes intronic RDDs within 4 bp of splice junctions;  
+“simple repeat” filter: discards sites in simple repeats;  
+“homopolymer” filter: removes sites in homopolyer runs of ≥5 bp;  
+“high editing level” filter: removes sites with 100% editing levels; 
+<br>  
+<br>  
+
+When calling variants I include basic filter for minimum coverage of 5 reads and 1 read with SNV.  
+
+freebayes -f /data/RBL_NCI/Phil/GIREMI_ref/Human/fdb.GENCODE.Gencode_human.release_19.GRCh37_p13_genome.fa \
+ -b /data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/HepG2_ADAR_ENCLB012QRD.dedup.bam \
+ -C 1 --min-coverage 5 \
+ -u > \ /data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/varFB_HepG2_ADAR_ENCLB012QRD.dedup.vcf 
+ <br>  
+     
+  -C --min-alternate-count  
+
+<br>  
+<br>  
+<br>  
+
+# Test Data processing methods to identify SNPs  
+
+```{r include=F ,echo=F,warning=F,eval=T}
+rm(list=ls())
+'%ni%' <- Negate('%in%')
+
+OL_ADAR_1_es=read.delim(paste0("../testdata/editing_sites.ADAR_Rep1.txt"), header=F, sep="\t",stringsAsFactors = F)
+OL_ADAR_2_es=read.delim(paste0("../testdata/editing_sites.ADAR_Rep2.txt"), header=F, sep="\t",stringsAsFactors = F)
+OL_ADARcntr_1_es=read.delim(paste0("../testdata/editing_sites.CONTROL305XWT_Rep1.txt"), header=F, sep="\t",stringsAsFactors = F)
+OL_ADARcntr_2_es=read.delim(paste0("../testdata/editing_sites.CONTROL305XWT_Rep2.txt"), header=F, sep="\t",stringsAsFactors = F)
+# OL_DHX30_1_es=read.delim(paste0("../testdata/editing_sites.DHX30_Rep1.txt"), header=F, sep="\t",stringsAsFactors = F)
+# OL_DHX30_2_es=read.delim(paste0("../testdata/editing_sites.DHX30_Rep2.txt"), header=F, sep="\t",stringsAsFactors = F)
+
+# OL_ADAR_1_es_VCF=read.delim(paste0("../testdata/editing_sites.ADAR_Rep1.txt"), header=F, sep="\t",stringsAsFactors = F)
+OL_ADAR_1_es$V0=paste0(OL_ADAR_1_es$V1,':',OL_ADAR_1_es$V2)
+OL_ADAR_2_es$V0=paste0(OL_ADAR_2_es$V1,':',OL_ADAR_2_es$V2)
+OL_ADAR_1_es$editing_ratio=OL_ADAR_1_es$V4/OL_ADAR_1_es$V5
+OL_ADAR_2_es$editing_ratio=OL_ADAR_2_es$V4/OL_ADAR_2_es$V5
+
+
+#######################################
+### DO NOT further filter example tables to compare dedup method and variant caller method as i want to use as many examples as possible
+
+# filter Online SNP Data:   
+# 1) with eding counts less <3 (Lee et.al 2013)  
+# 2) or filter SNP with editing Freq less then .1 and min coveage less than 5 (Zhang et.al 2015) also how I ran freebayes  
+# 
+# # OL_ADAR_1_es=OL_ADAR_1_es[OL_ADAR_1_es$V4>2,]
+# # OL_ADAR_2_es=OL_ADAR_2_es[OL_ADAR_2_es$V4>2,]
+# 
+# OL_ADAR_1_es=OL_ADAR_1_es[OL_ADAR_1_es$V5>5&OL_ADAR_1_es$editing_ratio>.1,]
+# OL_ADAR_2_es=OL_ADAR_2_es[OL_ADAR_2_es$V5>5&OL_ADAR_2_es$editing_ratio>.1,]
+
+```
+```{r ,fig.show='hold', include=F,echo=FALSE,message=FALSE,warning=FALSE,cache=F,eval=F}
+
+### just make sure that names in both lists have same locations
+# OL_all2=merge(OL_ADAR_1_es,OL_ADAR_2_es,by="V0",all=T)
+
+# length(unique(OL_mastertable$editing_site))
+# sum(duplicated(OL_mastertable$editing_site))
+
+a=unique(OL_ADAR_1_es$V0)
+b=unique(OL_ADAR_2_es$V0)
+
+OVLG_all=unique(c(a,b))
+
+
+a=OVLG_all%in%a
+b=OVLG_all%in%b
+
+C3=cbind(a,b)
+rownames(C3)=OVLG_all;colnames(C3)=c('OL_ADAR_1_es','OL_ADAR_1_es')
+vennDiagram(vennCounts(C3), main="Compare locations from online list",
+            circle.col = c("red", "blue", "green3"))
+
+remove(OL_all2)
+
+```
+```{r ,fig.show='hold', include=F,echo=FALSE,message=FALSE,warning=FALSE,cache=F}
+a=OL_ADAR_1_es[OL_ADAR_1_es$V4>0,]
+b=OL_ADAR_2_es[OL_ADAR_2_es$V4>0,]
+
+
+a=unique(a$V0)
+b=unique(b$V0)
+
+
+OVLG_all=unique(c(a,b))
+
+
+a=OVLG_all%in%a
+b=OVLG_all%in%b
+
+C3=cbind(a,b)
+rownames(C3)=OVLG_all;colnames(C3)=c('OL_1','OL_2')
+vennDiagram(vennCounts(C3),main="Compair samples where online list has editing count >0",
+            circle.col = c("red", "blue", "green3"))
+
+remove(a,b)
+```
+
+```{r include=F ,echo=F,warning=F,eval=T}
+
+# Get DE Genes
+
+OL_mastertable=read.delim(paste0("../testdata/Summary.all_de_sites.all_rbps.HepG2.new_fdr_corr.final.header.tab.txt"), header=T, sep="\t",stringsAsFactors = F)
+# unique(OL_mastertable$RBP)[grepl("RO", unique(OL_mastertable$RBP))]
+OL_mastertable_RO=OL_mastertable[OL_mastertable$RBP=="TROVE2",]
+
+OL_mastertable=OL_mastertable[OL_mastertable$RBP=="ADAR",]
+OL_mastertable=separate(OL_mastertable,col = editing_site,into = c("chr","pos",'strand'),sep = "\\|",remove = F)
+OL_mastertable$V0=paste0(OL_mastertable$chr,':',OL_mastertable$pos)
+
+
+OL_mastertable_OG=OL_mastertable
+# OL_mastertable=OL_mastertable[OL_mastertable$KD_editing_ratio>.1,]
+# OL_mastertable=OL_mastertable[OL_mastertable$chr%in%'chr2',]
+
+```
+
+```{r include=F ,echo=F,warning=T}
+
+## editingsites Online example
+
+OL_all=merge(OL_ADAR_1_es,OL_ADAR_2_es[,c("V0","V4","V5",'editing_ratio')],by="V0",suffixes=c(".1",".2"))
+
+OL_all=OL_all[rowSums(OL_all[,c('V4.1','V4.2')],na.rm=T)>0,]
+OL_all$avgV4=rowMeans(OL_all[,c('V4.1','V4.2')],na.rm=T)
+OL_all$avgV5=rowMeans(OL_all[,c('V5.1','V5.2')],na.rm=T)
+OL_all$avg_editing_ratio=rowMeans(OL_all[,c('editing_ratio.1','editing_ratio.2')],na.rm=T)
+
+
+
+OL_all$DE=0
+OL_all[OL_all$V0%in%OL_mastertable$V0,"DE"]=1
+OL_all=merge(OL_all,OL_mastertable[,c("V0","KD_mean_coverage","KD_editing_ratio")],by="V0",all.x=T)
+
+OL_all0=OL_all
+OL_all0[is.na(OL_all0)]=0
+
+
+```
+
+```{r include=F ,echo=F,warning=T}
+########################################################################
+########################################################################
+a=unique(OL_all$V0)
+b=unique(OL_mastertable[OL_mastertable$chr=="chr2",'V0'])
+xx=(OL_mastertable[OL_mastertable$V0%in%setdiff(b,a),])
+xx$KO_editing_count=xx$KD_editing_ratio*xx$KD_mean_coverage 
+# View(OL_mastertable[OL_mastertable$V0%in%intersect(b,a),])
+
+
+OVLG_all=unique(c(a,b))
+
+a=OVLG_all%in%a
+b=OVLG_all%in%b
+
+C3=cbind(a,b)
+rownames(C3)=OVLG_all;colnames(C3)=c('OL_all_cmp','OL_master_cmp')
+{vennDiagram(vennCounts(C3),main="Compair All Online list with chr2 master list",
+            circle.col = c("red", "blue", "green3"))
+            text(1,-2,'Loc in DE list only \n are loc that are not AtoG')}
+
+########################################################################
+
+# a=unique(OL_all[OL_all$V4.1>0|OL_all$V4.2,'V0'])
+# b=unique(OL_mastertable[OL_mastertable$chr=="chr2",'V0'])
+# 
+# OVLG_all=unique(c(a,b))
+# 
+# 
+# a=OVLG_all%in%a
+# b=OVLG_all%in%b
+# 
+# C3=cbind(a,b)
+# rownames(C3)=OVLG_all;colnames(C3)=c('OL_all_cmp','OL_master_cmp')
+# vennDiagram(vennCounts(C3),main="Compair Online list with chr2 master list",
+#             circle.col = c("red", "blue", "green3"))
+
+########################################################################
+########################################################################
+V5avg=rowMeans(OL_all0[,c('V5.1','V5.2')],na.rm = T)
+{plot(V5avg,OL_all0$KD_mean_coverage,xlab="Average OL_all ",ylab="KD_mean_coverage\nDE Loc",main="Compare Remove Duplicates:\nRead Depth",col='red')
+  abline(a=0,b=1)
+    text(40,6,"Loc along x axis are non-DE RNA editing sites")
+
+  }
+
+V4avg=rowMeans(OL_all0[,c('V4.1','V4.2')],na.rm = T)
+KD_editing_count=OL_all0$KD_editing_ratio*OL_all0$KD_mean_coverage
+{plot(V4avg,KD_editing_count,xlab="Average OL_all ",ylab="KD_mean_coverage\nDE Loc",main="Compare Remove Duplicates:\nEditing Depth",col='red')
+  abline(a=0,b=1)
+  text(20,2,"Loc along x axis are non-DE RNA editing sites")
+  }
+
+```
+  
+```{r include=F ,echo=F,warning=F,eval=T}
+
+ADAR_1_RZR_pcd <- read.vcfR( "../RASER/HepG2_ADAR_ENCLB012QRD.Picarddedup_OLchr2testdata.vcf", verbose = FALSE )
+ADAR_2_RZR_pcd <- read.vcfR( "../RASER/HepG2_ADAR_ENCLB918BSZ.Picarddedup_OLchr2testdata.vcf", verbose = FALSE )
+
+# Command for this  VCF from freebayes
+ADAR_1_RZR_pcd@meta[grepl("command",(ADAR_1_RZR_pcd@meta))]
+
+  ADAR_1_RZR_pcd <- cbind(as.data.frame(getFIX(ADAR_1_RZR_pcd)), INFO2df(ADAR_1_RZR_pcd))
+  ADAR_2_RZR_pcd <- cbind(as.data.frame(getFIX(ADAR_2_RZR_pcd)), INFO2df(ADAR_2_RZR_pcd))
+#  
+# ADAR_1_RZR_pcd=ADAR_1_RZR_pcd[(ADAR_1_RZR_pcd$REF=='A'&ADAR_1_RZR_pcd$ALT=='G')|(ADAR_1_RZR_pcd$REF=='T'&ADAR_1_RZR_pcd$ALT=='C'),]
+# ADAR_2_RZR_pcd=ADAR_2_RZR_pcd[(ADAR_2_RZR_pcd$REF=='A'&ADAR_2_RZR_pcd$ALT=='G')|(ADAR_2_RZR_pcd$REF=='T'&ADAR_2_RZR_pcd$ALT=='C'),]
+ADAR_1_RZR_pcd=ADAR_1_RZR_pcd[grepl('A',ADAR_1_RZR_pcd$REF)&grepl('G',ADAR_1_RZR_pcd$ALT)|grepl('T',ADAR_1_RZR_pcd$REF)&grepl('C',ADAR_1_RZR_pcd$ALT),]
+ADAR_2_RZR_pcd=ADAR_2_RZR_pcd[grepl('A',ADAR_2_RZR_pcd$REF)&grepl('G',ADAR_2_RZR_pcd$ALT)|grepl('T',ADAR_2_RZR_pcd$REF)&grepl('C',ADAR_2_RZR_pcd$ALT),]
+
+  # unique(ADAR_1_RZR_pcd$TYPE)
+  
+  ADAR_1_RZR_pcd <- ADAR_1_RZR_pcd[grep("snp",ADAR_1_RZR_pcd$TYPE),]
+  ADAR_2_RZR_pcd <- ADAR_2_RZR_pcd[grep("snp",ADAR_2_RZR_pcd$TYPE),]
+  
+  ADAR_1_RZR_pcd <- ADAR_1_RZR_pcd[(duplicated(ADAR_1_RZR_pcd)==F),]
+  ADAR_2_RZR_pcd <- ADAR_2_RZR_pcd[(duplicated(ADAR_2_RZR_pcd)==F),]
+########
+```
+```{r include=F ,echo=F,warning=F,eval=T}
+
+ADAR_1_RZR_rmdup <- read.vcfR( "../RASER/HepG2_ADAR_ENCLB012QRD.fm.mkdedup_OLchr2testdata.vcf", verbose = FALSE )
+ADAR_2_RZR_rmdup <- read.vcfR( "../RASER/HepG2_ADAR_ENCLB918BSZ.fm.mkdedup_OLchr2testdata.vcf", verbose = FALSE )
+
+# Command for this  VCF from freebayes
+ADAR_2_RZR_rmdup@meta[grepl("command",(ADAR_2_RZR_rmdup@meta))]
+
+  ADAR_1_RZR_rmdup <- cbind(as.data.frame(getFIX(ADAR_1_RZR_rmdup)), INFO2df(ADAR_1_RZR_rmdup))
+  ADAR_2_RZR_rmdup <- cbind(as.data.frame(getFIX(ADAR_2_RZR_rmdup)), INFO2df(ADAR_2_RZR_rmdup))
+ 
+# ADAR_1_RZR_rmdup=ADAR_1_RZR_rmdup[(ADAR_1_RZR_rmdup$REF=='A'&ADAR_1_RZR_rmdup$ALT=='G')|(ADAR_1_RZR_rmdup$REF=='T'&ADAR_1_RZR_rmdup$ALT=='C'),]
+# ADAR_2_RZR_rmdup=ADAR_2_RZR_rmdup[(ADAR_2_RZR_rmdup$REF=='A'&ADAR_2_RZR_rmdup$ALT=='G')|(ADAR_2_RZR_rmdup$REF=='T'&ADAR_2_RZR_rmdup$ALT=='C'),]
+ADAR_1_RZR_rmdup=ADAR_1_RZR_rmdup[grepl('A',ADAR_1_RZR_rmdup$REF)&grepl('G',ADAR_1_RZR_rmdup$ALT)|grepl('T',ADAR_1_RZR_rmdup$REF)&grepl('C',ADAR_1_RZR_rmdup$ALT),]
+ADAR_2_RZR_rmdup=ADAR_2_RZR_rmdup[grepl('A',ADAR_2_RZR_rmdup$REF)&grepl('G',ADAR_2_RZR_rmdup$ALT)|grepl('T',ADAR_2_RZR_rmdup$REF)&grepl('C',ADAR_2_RZR_rmdup$ALT),]
+  # unique(ADAR_1_RZR_rmdup$TYPE)
+
+  ADAR_1_RZR_rmdup <- ADAR_1_RZR_rmdup[grep("snp",ADAR_1_RZR_rmdup$TYPE),]
+  ADAR_2_RZR_rmdup <- ADAR_2_RZR_rmdup[grep("snp",ADAR_2_RZR_rmdup$TYPE),]
+  
+  ADAR_1_RZR_rmdup <- ADAR_1_RZR_rmdup[(duplicated(ADAR_1_RZR_rmdup)==F),]
+  ADAR_2_RZR_rmdup <- ADAR_2_RZR_rmdup[(duplicated(ADAR_2_RZR_rmdup)==F),]
+  
+########
+```
+```{r include=F ,echo=F,warning=F,eval=T}
+ADAR_1_RZR_dedup <- read.vcfR( "../RASER/HepG2_ADAR_ENCLB012QRD.dedup_OLchr2testdata.vcf", verbose = FALSE )
+ADAR_2_RZR_dedup <- read.vcfR( "../RASER/HepG2_ADAR_ENCLB918BSZ.dedup_OLchr2testdata.vcf", verbose = FALSE )
+
+# Command for this  VCF from freebayes
+ADAR_1_RZR_dedup@meta[grepl("command",(ADAR_1_RZR_dedup@meta))]
+
+  ADAR_1_RZR_dedup <- cbind(as.data.frame(getFIX(ADAR_1_RZR_dedup)), INFO2df(ADAR_1_RZR_dedup))
+  ADAR_2_RZR_dedup <- cbind(as.data.frame(getFIX(ADAR_2_RZR_dedup)), INFO2df(ADAR_2_RZR_dedup))
+ 
+ ADAR_1_RZR_dedupOG=ADAR_1_RZR_dedup 
+ ADAR_2_RZR_dedupOG=ADAR_2_RZR_dedup 
+  
+# ADAR_1_RZR_dedup=ADAR_1_RZR_dedup[(ADAR_1_RZR_dedup$REF=='A'&ADAR_1_RZR_dedup$ALT=='G')|(ADAR_1_RZR_dedup$REF=='T'&ADAR_1_RZR_dedup$ALT=='C'),]
+# ADAR_2_RZR_dedup=ADAR_2_RZR_dedup[(ADAR_2_RZR_dedup$REF=='A'&ADAR_2_RZR_dedup$ALT=='G')|(ADAR_2_RZR_dedup$REF=='T'&ADAR_2_RZR_dedup$ALT=='C'),]
+ADAR_1_RZR_dedup=ADAR_1_RZR_dedup[grepl('A',ADAR_1_RZR_dedup$REF)&grepl('G',ADAR_1_RZR_dedup$ALT)|grepl('T',ADAR_1_RZR_dedup$REF)&grepl('C',ADAR_1_RZR_dedup$ALT),]
+ADAR_2_RZR_dedup=ADAR_2_RZR_dedup[grepl('A',ADAR_2_RZR_dedup$REF)&grepl('G',ADAR_2_RZR_dedup$ALT)|grepl('T',ADAR_2_RZR_dedup$REF)&grepl('C',ADAR_2_RZR_dedup$ALT),]
+
+  # unique(ADAR_1_RZR_dedup$TYPE)
+
+  ADAR_1_RZR_dedup <- ADAR_1_RZR_dedup[grep("snp",ADAR_1_RZR_dedup$TYPE),]
+  ADAR_2_RZR_dedup <- ADAR_2_RZR_dedup[grep("snp",ADAR_2_RZR_dedup$TYPE),]
+  
+  ADAR_1_RZR_dedup <- ADAR_1_RZR_dedup[(duplicated(ADAR_1_RZR_dedup)==F),]
+  ADAR_2_RZR_dedup <- ADAR_2_RZR_dedup[(duplicated(ADAR_2_RZR_dedup)==F),]
+########
+```
+
+
+## Remove Duplicates  
+
+use samtools rmdup (Dedup)  
+use samtools markdup -r -t (rmdup)  
+use picard_remvdup (pcd)  
+
+samtools markdup and picard_remvdup give same answer  
+
+
+```{r include=F ,echo=F,warning=F,eval=T}
+
+# Evaluate Variant counts with with freebayes
+#
+# see above from VCF
+
+```
+
+```{r include=F ,echo=F,warning=F,eval=T}
+
+
+######
+ADAR_1_RZR_dedup=ADAR_1_RZR_dedup[ADAR_1_RZR_dedup$CHROM=="chr2",]
+ADAR_2_RZR_dedup=ADAR_2_RZR_dedup[ADAR_2_RZR_dedup$CHROM=="chr2",]
+ADAR_1_RZR_dedup=ADAR_1_RZR_dedup[grep("snp",ADAR_1_RZR_dedup$TYP),]
+ADAR_2_RZR_dedup=ADAR_2_RZR_dedup[grep("snp",ADAR_2_RZR_dedup$TYPE),]
+ADAR_1_RZR_dedup$POS=as.numeric(as.character(ADAR_1_RZR_dedup$POS))
+ADAR_2_RZR_dedup$POS=as.numeric(as.character(ADAR_2_RZR_dedup$POS))
+ADAR_1_RZR_dedup$AO=as.numeric(as.character(ADAR_1_RZR_dedup$AO))
+ADAR_2_RZR_dedup$AO=as.numeric(as.character(ADAR_2_RZR_dedup$AO))
+
+ADAR_1_RZR_dedup$V0=paste0(ADAR_1_RZR_dedup$CHROM,':',ADAR_1_RZR_dedup$POS)
+ADAR_2_RZR_dedup$V0=paste0(ADAR_2_RZR_dedup$CHROM,':',ADAR_2_RZR_dedup$POS)
+
+ADAR_1_RZR_dedup$editing_ratio=ADAR_1_RZR_dedup$AO/ADAR_1_RZR_dedup$DP
+ADAR_2_RZR_dedup$editing_ratio=ADAR_2_RZR_dedup$AO/ADAR_2_RZR_dedup$DP
+
+
+OL=merge(OL_all,ADAR_1_RZR_dedup[,c("V0",'AO','DP','editing_ratio')],all.x=T,by="V0")
+OL=merge(OL,ADAR_2_RZR_dedup[,c("V0",'AO','DP','editing_ratio')],all.x=T,by="V0",suffixes=c(".1_dedup",".2_dedup"))
+OL$DP_dedup=rowMeans(OL[,c('DP.1_dedup','DP.2_dedup')],na.rm = T)
+OL$AO_dedup=rowMeans(OL[,c('AO.1_dedup','AO.2_dedup')],na.rm = T)
+
+######
+ADAR_1_RZR_rmdup=ADAR_1_RZR_rmdup[ADAR_1_RZR_rmdup$CHROM=="chr2",]
+ADAR_2_RZR_rmdup=ADAR_2_RZR_rmdup[ADAR_2_RZR_rmdup$CHROM=="chr2",]
+ADAR_1_RZR_rmdup=ADAR_1_RZR_rmdup[grep("snp",ADAR_1_RZR_rmdup$TYPE),]
+ADAR_2_RZR_rmdup=ADAR_2_RZR_rmdup[grep("snp",ADAR_2_RZR_rmdup$TYPE),]
+ADAR_1_RZR_rmdup$POS=as.numeric(as.character(ADAR_1_RZR_rmdup$POS))
+ADAR_2_RZR_rmdup$POS=as.numeric(as.character(ADAR_2_RZR_rmdup$POS))
+ADAR_1_RZR_rmdup$AO=as.numeric(as.character(ADAR_1_RZR_rmdup$AO))
+ADAR_2_RZR_rmdup$AO=as.numeric(as.character(ADAR_2_RZR_rmdup$AO))
+
+ADAR_1_RZR_rmdup$V0=paste0(ADAR_1_RZR_rmdup$CHROM,':',ADAR_1_RZR_rmdup$POS)
+ADAR_2_RZR_rmdup$V0=paste0(ADAR_2_RZR_rmdup$CHROM,':',ADAR_2_RZR_rmdup$POS)
+
+
+######
+ADAR_1_RZR_pcd=ADAR_1_RZR_pcd[ADAR_1_RZR_pcd$CHROM=="chr2",]
+ADAR_2_RZR_pcd=ADAR_2_RZR_pcd[ADAR_2_RZR_pcd$CHROM=="chr2",]
+ADAR_1_RZR_pcd=ADAR_1_RZR_pcd[grep("snp",ADAR_1_RZR_pcd$TYPE),]
+ADAR_2_RZR_pcd=ADAR_2_RZR_pcd[grep("snp",ADAR_2_RZR_pcd$TYPE),]
+ADAR_1_RZR_pcd$POS=as.numeric(as.character(ADAR_1_RZR_pcd$POS))
+ADAR_2_RZR_pcd$POS=as.numeric(as.character(ADAR_2_RZR_pcd$POS))
+ADAR_1_RZR_pcd$AO=as.numeric(as.character(ADAR_1_RZR_pcd$AO))
+ADAR_2_RZR_pcd$AO=as.numeric(as.character(ADAR_2_RZR_pcd$AO))
+
+ADAR_1_RZR_pcd$V0=paste0(ADAR_1_RZR_pcd$CHROM,':',ADAR_1_RZR_pcd$POS)
+ADAR_2_RZR_pcd$V0=paste0(ADAR_2_RZR_pcd$CHROM,':',ADAR_2_RZR_pcd$POS)
+
+
+OL=merge(OL,ADAR_1_RZR_pcd[,c("V0",'AO','DP')],all.x=T,by="V0")
+OL=merge(OL,ADAR_2_RZR_pcd[,c("V0",'AO','DP')],all.x=T,by="V0",suffixes=c(".1_pcd",".2_pcd"))
+OL$DP_pcd=rowMeans(OL[,c('DP.1_pcd','DP.2_pcd')],na.rm = T)
+OL$AO_pcd=rowMeans(OL[,c('AO.1_pcd','AO.2_pcd')],na.rm = T)
+
+OL0=OL
+OL0[is.na(OL0)]=0
+```
+```{r include=F ,echo=F,warning=F,eval=T}
+
+colP<- colorRampPalette(c("blue", "white", "red"))(200)
+
+a=OL[,c('V5.1',"V5.2",'DP.1_pcd','DP.2_pcd','DP.1_dedup','DP.2_dedup')]
+a[is.na(a)]=0
+OL_1cor=cor(a,method = c("pearson"))
+x3=pheatmap(OL_1cor, cluster_rows = F,cluster_cols = F,display_numbers=T,fontsize_number=10,fontsize = 8,angle_col=45, cellwidth = 30, cellheight = 30,cutree_cols=NA, col=colP,main="All Genes \n Log Transformed")
+```
+```{r include=T ,echo=F,warning=F,eval=F}
+
+
+{plot(OL0$V5.1,OL0$DP.1_dedup,xlab="Example Data ",ylab="Custom Alignment Counts",main="Compare Samples:\nRead Depth",pch=20,xlim=c(0,70),ylim=c(0,80))
+  points(OL0$V5.1,OL0$DP.2_dedup,pch=1,col='red')
+  abline(a=0,b=1)
+  legend(35,20,legend = c('OL_sample1 VS rmdup1_QRD', 'OL_sample1 VS rmdup2_BSZ'),col=c('black','red'),pch = 20)}
+# {plot(OL0$V5.2,OL0$DP.1_dedup,xlab="Example Data 2",ylab="dedup",main="Alternative Editing count",pch=20,xlim=c(0,70),ylim=c(0,80))
+#   points(OL0$V5.2,OL0$DP.2_dedup,pch=20,col='red')
+#   abline(a=0,b=1)}
+```
+```{r include=T ,echo=F,warning=F,eval=T}
+{plot(OL0$V5.1,OL0$DP.2_pcd,xlab="Example Data ",ylab="Custom Alignment Counts",main="Compare Remove Duplicates:\nRead Depth",col='red')
+  # points(OL0$V5.1,OL0$DP.2_pcd,col='red')
+  points(OL0$V5.1,OL0$DP.2_dedup,pch=20)
+  # points(OL0$V5.1,OL0$DP.2_dedup,pch=20,col='red')
+  abline(a=0,b=1)
+  legend(1,200,legend = c('Picard:MarkDuplicates', 'samtools:rmdup'),col=c('red','black'),pch = c(1,20))
+  text(12,140,"points along x axis are loc.\n not detected from Example data")}
+# {plot(OL0$V5.2,OL0$DP.1_pcd,xlab="Example Data 2",ylab="Program",main="Alternative Editing count",col='red')
+#   # points(OL0$V5.2,OL0$DP.2_pcd,col='red')
+#   points(OL0$V5.2,OL0$DP.1_dedup,xlab="Example Data 2",ylab="Program",main="Alternative Editing count",pch=20)
+#   # points(OL0$V5.2,OL0$DP.2_dedup,pch=20,col='red')
+#   abline(a=0,b=1)}
+```
+```{r include=T ,echo=F,warning=F,eval=F}
+
+{plot(OL0$V5.1,OL0$V5.2,xlab="Example Data-1",ylab="Example Data-2",main="Read Depth",pch=20)
+  abline(a=0,b=1)}
+
+# cor(OL0$V5.1,OL0$V5.2)
+# {plot(OL_1$DP,OL_1$DP.rmdup,xlab="Example Data",ylab="dedup",main="Alternative Editing count",pch=20)}
+
+# qq(OL_1$V5,OL_1$DP.dedup,pch=20)
+# qqplot(OL_1$V5,OL_1$DP.rmdup,pch=20,col='red')
+# qqplot(OL_1$DP.dedup,OL_1$DP.rmdup,pch=20,col='blue')
+# 
+# 
+# {points(qqnorm(OL_1$DP.dedup,pch=20,col='green'))
+# points(qqnorm(OL_1$DP.rmdup,pch=20,col='red'))
+# points(qqnorm(OL_1$V5,pch=20,col='blue'))}
+```
+
+
+```{r include=F ,echo=F,warning=F,eval=T}
+# Compare Editing Count  
+
+a=OL0[,c('V4.1',"V4.2",'AO.1_pcd','AO.2_pcd','AO.1_dedup','AO.2_dedup')]
+
+a$AO.1_pcd=as.numeric(as.character(a$AO.1_pcd));a$AO.2_pcd=as.numeric(as.character(a$AO.2_pcd))
+a$AO.1_dedup=as.numeric(as.character(a$AO.1_dedup));a$AO.2_dedup=as.numeric(as.character(a$AO.2_dedup))
+a[is.na(a)]=0
+OL_1cor=cor(a,method = c("pearson"))
+x3=pheatmap(OL_1cor, cluster_rows = T,cluster_cols = T,display_numbers=T,fontsize_number=10,fontsize = 8,angle_col=45, cellwidth = 30, cellheight = 30,cutree_cols=NA, col=colP,main="All Genes \n Log Transformed")
+```
+<br>  
+
+
+```{r include=T ,echo=F,warning=F,eval=F}
+
+{plot(OL0$V4.1,OL0$AO.1_dedup,xlab="Example Data ",ylab="Custom Alignment Counts",main="Compare Samples:\nEditing count",pch=20,xlim=c(0,35),ylim=c(0,35))
+  points(OL0$V4.1,OL0$AO.2_dedup,pch=20,col='red')
+  abline(a=0,b=1)
+  legend(19,7,legend = c('OL_sample1 VS rmdup1_QRD', 'OL_sample1 VS rmdup2_BSZ'),col=c('black','red'),pch = 20)}
+# {plot(OL0$V4.2,OL0$AO.1_dedup,xlab="Example Data 2",ylab="dedup",main="Alternative Editing count",pch=20,xlim=c(0,70),ylim=c(0,80))
+#   points(OL0$V4.2,OL0$AO.2_dedup,pch=20,col='red')
+#   abline(a=0,b=1)}
+```
+```{r include=T ,echo=F,warning=F,eval=T}
+{plot(OL0$V4.1,OL0$AO.2_pcd,xlab="Example Data ",ylab="Custom Alignment Counts",main="Compare Remove Duplicates:\nEditing count",col='red')
+  # points(OL0$V4.1,OL0$AO.2_pcd,col='red')
+  points(OL0$V4.1,OL0$AO.2_dedup,pch=20)
+  # points(OL0$V5.1,OL0$AO.2_dedup,pch=20,col='red')
+  abline(a=0,b=1)
+  legend(19,12,legend = c('Picard:MarkDuplicates', 'samtools:rmdup'),col=c('red','black'),pch = c(1,20))}
+# {plot(OL0$V5.2,OL0$AO.1_pcd,xlab="Example Data 2",ylab="Program",main="Alternative Editing count",col='red')
+#   # points(OL0$V5.2,OL0$AO.2_pcd,col='red')
+#   points(OL0$V5.2,OL0$AO.1_dedup,xlab="Example Data 2",ylab="Program",main="Alternative Editing count",pch=20)
+#   # points(OL0$V5.2,OL0$AO.2_dedup,pch=20,col='red')
+#   abline(a=0,b=1)}
+
+# {plot(OL0$V5.1,OL0$V5.2,xlab="Example Data",ylab="dedup",main="Alternative Editing count",pch=20)
+#   abline(a=0,b=1)}
+```
+<br>  
+Samtools rmdup/Picard remvdup result in higher counts than counts supplied from paper.  
+
+<br>  
+
+## Variant caller  
+
+freebayes vs mpilup | bcftools  
+
+
+```{r include=F ,echo=F,warning=F,eval=T}
+ADAR_1_RZR_dedup_PU <- read.vcfR( "../RASER/mpileup/HepG2_ADAR_ENCLB012QRD.dedup.bam_mpile_chr2.vcf", verbose = FALSE )
+ADAR_2_RZR_dedup_PU <- read.vcfR( "../RASER/mpileup/HepG2_ADAR_ENCLB918BSZ.dedup.bam_mpile_chr2.vcf", verbose = FALSE )
+
+  ADAR_1_RZR_dedup_PU <- cbind(as.data.frame(getFIX(ADAR_1_RZR_dedup_PU)), INFO2df(ADAR_1_RZR_dedup_PU))
+  ADAR_2_RZR_dedup_PU <- cbind(as.data.frame(getFIX(ADAR_2_RZR_dedup_PU)), INFO2df(ADAR_2_RZR_dedup_PU))
+ 
+# ADAR_1_RZR_dedup_PU=ADAR_1_RZR_dedup_PU[(ADAR_1_RZR_dedup_PU$REF=='A'&ADAR_1_RZR_dedup_PU$ALT=='G')|(ADAR_1_RZR_dedup_PU$REF=='T'&ADAR_1_RZR_dedup_PU$ALT=='C'),]
+# ADAR_2_RZR_dedup_PU=ADAR_2_RZR_dedup_PU[(ADAR_2_RZR_dedup_PU$REF=='A'&ADAR_2_RZR_dedup_PU$ALT=='G')|(ADAR_2_RZR_dedup_PU$REF=='T'&ADAR_2_RZR_dedup_PU$ALT=='C'),]
+
+  ADAR_1_RZR_dedup_PU <- ADAR_1_RZR_dedup_PU[(duplicated(ADAR_1_RZR_dedup_PU)==F),]
+  ADAR_1_RZR_dedup_PU <- ADAR_1_RZR_dedup_PU[(duplicated(ADAR_1_RZR_dedup_PU)==F),]
+########
+```
+```{r include=F ,echo=F,warning=F,eval=T}
+
+######
+ADAR_1_RZR_dedup_PU=ADAR_1_RZR_dedup_PU[ADAR_1_RZR_dedup_PU$CHROM=="chr2",]
+ADAR_2_RZR_dedup_PU=ADAR_2_RZR_dedup_PU[ADAR_2_RZR_dedup_PU$CHROM=="chr2",]
+ADAR_1_RZR_dedup_PU$POS=as.numeric(as.character(ADAR_1_RZR_dedup_PU$POS))
+ADAR_2_RZR_dedup_PU$POS=as.numeric(as.character(ADAR_2_RZR_dedup_PU$POS))
+
+ADAR_1_RZR_dedup_PU$V0=paste0(ADAR_1_RZR_dedup_PU$CHROM,':',ADAR_1_RZR_dedup_PU$POS)
+ADAR_2_RZR_dedup_PU$V0=paste0(ADAR_2_RZR_dedup_PU$CHROM,':',ADAR_2_RZR_dedup_PU$POS)
+
+  ADAR_1_RZR_dedup_PU=separate(ADAR_1_RZR_dedup_PU,DP4,into = c('A','B','C','D'),sep = ",",remove = F)
+  ADAR_1_RZR_dedup_PU$C=as.numeric(ADAR_1_RZR_dedup_PU$C);ADAR_1_RZR_dedup_PU$D=as.numeric(ADAR_1_RZR_dedup_PU$D)
+  ADAR_1_RZR_dedup_PU$ALTnum=rowSums((ADAR_1_RZR_dedup_PU[,c('C','D')]))
+  
+  ADAR_2_RZR_dedup_PU=separate(ADAR_2_RZR_dedup_PU,DP4,into = c('A','B','C','D'),sep = ",",remove = F)
+  ADAR_2_RZR_dedup_PU$C=as.numeric(ADAR_2_RZR_dedup_PU$C);ADAR_2_RZR_dedup_PU$D=as.numeric(ADAR_2_RZR_dedup_PU$D)
+  ADAR_2_RZR_dedup_PU$ALTnum=rowSums((ADAR_2_RZR_dedup_PU[,c('C','D')]))
+  
+
+OLvarcall=merge(OL,ADAR_1_RZR_dedup_PU[,c("V0",'DP','ALTnum')],all.x=T,by="V0")
+OLvarcall=merge(OLvarcall,ADAR_2_RZR_dedup_PU[,c("V0",'DP','ALTnum')],all.x=T,by="V0",suffixes=c(".1_dedup_PU",".2_dedup_PU"))
+
+
+OLvarcall0=OLvarcall
+OLvarcall0[is.na(OLvarcall0)]=0
+
+```
+```{r include=T ,echo=F,warning=F,eval=F}
+
+a=OLvarcall0[,c('V4.1',"V4.2",'DP.1_dedup_PU','DP.2_dedup_PU','DP.1_dedup','DP.2_dedup')]
+
+a$DP.1_dedup=as.numeric(as.character(a$DP.1_dedup));a$DP.2_dedup=as.numeric(as.character(a$DP.2_dedup))
+a[is.na(a)]=0
+OL_1cor=cor(a,method = c("pearson"))
+x3=pheatmap(OL_1cor, cluster_rows = T,cluster_cols = T,display_numbers=T,fontsize_number=10,fontsize = 8,angle_col=45, cellwidth = 30, cellheight = 30,cutree_cols=NA, col=colP,main="All Genes \n Log Transformed")
+
+```
+```{r include=T ,echo=F,warning=F,eval=F}
+
+{plot(OLvarcall0$V5.1,OLvarcall0$DP.1_dedup_PU,xlab="Example Data ",ylab="Custom Alignment Counts",main="Compare samples with   mpilup | bcftools: \nRead Depth", pch=20,xlim=c(0,80),ylim=c(0,80))
+  points(OLvarcall0$V5.1,OLvarcall0$DP.2_dedup_PU,pch=1,col='red')
+  abline(a=0,b=1)
+  legend(40,18,legend = c('OL_sample1 VS rmdup_PU1_QRD', 'OL_sample1 VS rmdup_PU2_BSZ'),col=c('black','red'),pch = 20)}
+# {plot(OLvarcall0$V5.2,OLvarcall0$DP.1_dedup_PU,xlab="Example Data 2",ylab="dedup",main="Alternative Editing count",pch=20,xlim=c(0,35),ylim=c(0,35))
+#   points(OLvarcall0$V5.2,OLvarcall0$DP.2_dedup_PU,pch=20,col='red')
+#   abline(a=0,b=1)}
+```
+```{r include=T ,echo=F,warning=F,eval=T}
+
+{plot(OLvarcall0$V5.1,OLvarcall0$DP.2_dedup_PU,xlab="Example Data ",ylab="Custom Alignment Counts",main="Compare samples Variant Callers: \nRead Depth",col='red',xlim=c(0,80),ylim=c(0,80))
+  points(OLvarcall0$V5.1,OLvarcall0$DP.2_dedup,xlab="Example Data 1",ylab="Program",main="Alternative Editing count",pch=20)
+  abline(a=0,b=1)
+  legend(40,18,legend = c('mpileup | bcftools', 'freebayes'),col=c('red','black'),pch = c(1,20))}
+
+```
+```{r include=T ,echo=F,warning=F,eval=T}
+
+{plot(OLvarcall0$V4.1,OLvarcall0$ALTnum.2_dedup_PU,xlab="Example Data ",ylab="Custom Alignment Counts",main="Compare samples Variant Callers: \nEditing count",col='red',xlim=c(0,40),ylim=c(0,40))
+  points(OLvarcall0$V4.1,OLvarcall0$AO.2_dedup,xlab="Example Data 1",ylab="Program",main="Alternative Editing count",pch=20)
+  abline(a=0,b=1)
+  legend(20,9,legend = c('mpileup | bcftools', 'freebayes'),col=c('red','black'),pch = c(1,20))}
+
+
+
+```
+
+<br>  
+freebayes method identifies more of the variant positions than the mpileup | bcftools method.  
+The counts for the positions that are identified are the same for both methods.  
+<br>   
+
+# Test counts filters after calling SNPs  
+
+**Compare Averaged data from both ADAR1 samples**   
+
+Given the list of possible RNAediting sites from chr2, determine how counts filters effect ability to reproduce data.  
+Only call variants at sites identified from online data.   
+
+<br>   
+
+
+
+**Example data Editing sites:**   
+Average Read depth > 0  
+**Freebayes filter:**   
+Variant read count > 1   
+total read depth > 5   
+variant frequency > 10%   
+
+
+```{r include=F ,echo=F,warning=F,eval=F}
+OL3
+```
+
+```{r include=F ,echo=F,warning=F,eval=T}
+ADAR_1_RZR_dedup_flt <- read.vcfR( "../RASER/HepG2_ADAR_ENCLB012QRD.dedup_filter_OLchr2testdata.vcf", verbose = FALSE )
+ADAR_2_RZR_dedup_flt <- read.vcfR( "../RASER/HepG2_ADAR_ENCLB918BSZ.dedup_filter_OLchr2testdata.vcf", verbose = FALSE )
+
+# Command for this  VCF from freebayes
+ADAR_1_RZR_dedup_flt@meta[grepl("command",(ADAR_1_RZR_dedup_flt@meta))]
+
+  ADAR_1_RZR_dedup_flt <- cbind(as.data.frame(getFIX(ADAR_1_RZR_dedup_flt)), INFO2df(ADAR_1_RZR_dedup_flt))
+  ADAR_2_RZR_dedup_flt <- cbind(as.data.frame(getFIX(ADAR_2_RZR_dedup_flt)), INFO2df(ADAR_2_RZR_dedup_flt))
+ 
+ADAR_1_RZR_dedup_fltOG = ADAR_1_RZR_dedup_flt
+ADAR_2_RZR_dedup_fltOG = ADAR_2_RZR_dedup_flt
+  
+ADAR_1_RZR_dedup_flt$AO=as.numeric(ADAR_1_RZR_dedup_flt$AO)
+ADAR_2_RZR_dedup_flt$AO=as.numeric(ADAR_2_RZR_dedup_flt$AO)
+ADAR_1_RZR_dedup_flt$POS=as.numeric(as.character(ADAR_1_RZR_dedup_flt$POS))
+ADAR_2_RZR_dedup_flt$POS=as.numeric(as.character(ADAR_2_RZR_dedup_flt$POS))
+ADAR_1_RZR_dedup_flt$POS=as.numeric(as.character(ADAR_1_RZR_dedup_flt$POS))
+ADAR_2_RZR_dedup_flt$POS=as.numeric(as.character(ADAR_2_RZR_dedup_flt$POS))
+
+
+
+# ADAR_1_RZR_dedup_flt=ADAR_1_RZR_dedup_flt[(ADAR_1_RZR_dedup_flt$REF=='A'&ADAR_1_RZR_dedup_flt$ALT=='G')|(ADAR_1_RZR_dedup_flt$REF=='T'&ADAR_1_RZR_dedup_flt$ALT=='C'),]
+# ADAR_2_RZR_dedup_flt=ADAR_2_RZR_dedup_flt[(ADAR_2_RZR_dedup_flt$REF=='A'&ADAR_2_RZR_dedup_flt$ALT=='G')|(ADAR_2_RZR_dedup_flt$REF=='T'&ADAR_2_RZR_dedup_flt$ALT=='C'),]
+ADAR_1_RZR_dedup_flt=ADAR_1_RZR_dedup_flt[grepl('A',ADAR_1_RZR_dedup_flt$REF)&grepl('G',ADAR_1_RZR_dedup_flt$ALT)|grepl('T',ADAR_1_RZR_dedup_flt$REF)&grepl('C',ADAR_1_RZR_dedup_flt$ALT),]
+ADAR_2_RZR_dedup_flt=ADAR_2_RZR_dedup_flt[grepl('A',ADAR_2_RZR_dedup_flt$REF)&grepl('G',ADAR_2_RZR_dedup_flt$ALT)|grepl('T',ADAR_2_RZR_dedup_flt$REF)&grepl('C',ADAR_2_RZR_dedup_flt$ALT),]
+#   
+  ADAR_1_RZR_dedup_flt <- ADAR_1_RZR_dedup_flt[(duplicated(ADAR_1_RZR_dedup_flt)==F),]
+  ADAR_1_RZR_dedup_flt <- ADAR_1_RZR_dedup_flt[(duplicated(ADAR_1_RZR_dedup_flt)==F),]
+########
+```
+```{r include=F ,echo=F,warning=F,eval=T}
+
+######
+ADAR_1_RZR_dedup_flt=ADAR_1_RZR_dedup_flt[ADAR_1_RZR_dedup_flt$CHROM=="chr2",]
+ADAR_2_RZR_dedup_flt=ADAR_2_RZR_dedup_flt[ADAR_2_RZR_dedup_flt$CHROM=="chr2",]
+ADAR_1_RZR_dedup_flt=ADAR_1_RZR_dedup_flt[grep("snp",ADAR_1_RZR_dedup_flt$TYPE),]
+ADAR_2_RZR_dedup_flt=ADAR_2_RZR_dedup_flt[grep("snp",ADAR_2_RZR_dedup_flt$TYPE),]
+
+ADAR_1_RZR_dedup_flt$V0=paste0(ADAR_1_RZR_dedup_flt$CHROM,':',ADAR_1_RZR_dedup_flt$POS)
+ADAR_2_RZR_dedup_flt$V0=paste0(ADAR_2_RZR_dedup_flt$CHROM,':',ADAR_2_RZR_dedup_flt$POS)
+
+
+### currently did not include freq filter so adding it in now
+ADAR_1_RZR_dedup_flt$editing_ratio=ADAR_1_RZR_dedup_flt$AO/ADAR_1_RZR_dedup_flt$DP
+ADAR_2_RZR_dedup_flt$editing_ratio=ADAR_2_RZR_dedup_flt$AO/ADAR_2_RZR_dedup_flt$DP
+ 
+ADAR_1_RZR_dedup_fltbyER=unique(ADAR_1_RZR_dedup_flt[(ADAR_1_RZR_dedup_flt$editing_ratio<=.1|is.na(ADAR_1_RZR_dedup_flt$editing_ratio)),'V0'])
+ADAR_2_RZR_dedup_fltbyER=unique(ADAR_2_RZR_dedup_flt[(ADAR_2_RZR_dedup_flt$editing_ratio<=.1|is.na(ADAR_2_RZR_dedup_flt$editing_ratio)),'V0'])
+
+
+ADAR_1_RZR_dedup_flt=ADAR_1_RZR_dedup_flt[((ADAR_1_RZR_dedup_flt$editing_ratio>.1)),]
+ADAR_1_RZR_dedup_flt=ADAR_1_RZR_dedup_flt[is.na(ADAR_1_RZR_dedup_flt$V0)==F,]
+ADAR_2_RZR_dedup_flt=ADAR_2_RZR_dedup_flt[((ADAR_2_RZR_dedup_flt$editing_ratio>.1)),]
+ADAR_2_RZR_dedup_flt=ADAR_2_RZR_dedup_flt[is.na(ADAR_2_RZR_dedup_flt$V0)==F,]
+
+
+OL3=merge(OL,ADAR_1_RZR_dedup_flt[,c("V0",'AO','DP','editing_ratio')],all.x=T,by="V0")
+OL3=merge(OL3,ADAR_2_RZR_dedup_flt[,c("V0",'AO','DP','editing_ratio')],all.x=T,by="V0",suffixes=c(".1_dedup_flt",".2_dedup_flt"))
+
+OL3=OL3[,setdiff(colnames(OL3),c('AO.1_pcd','DP.1_pcd','AO.2_pcd','DP.2_pcd','DP_pcd','AO_pcd'))]
+OL3=OL3[duplicated(OL3)==F,]
+OL3$DP_dedup_flt=rowMeans(OL3[,c('DP.1_dedup_flt','DP.2_dedup_flt')],na.rm = T)
+# OL3$AO_dedup_flt=rowMeans(OL3[,c('AO.1_dedup_flt','AO.2_dedup_flt')],na.rm = T)
+
+OL30=OL3
+OL30[is.na(OL30)]=0
+```
+```{r include=F ,echo=F,warning=F,eval=T}
+
+a=OL30[,c('V4.1',"V4.2",'DP.1_dedup_flt','DP.2_dedup_flt','DP.1_dedup','DP.2_dedup')]
+
+a$DP.1_dedup=as.numeric(as.character(a$DP.1_dedup));a$DP.2_dedup=as.numeric(as.character(a$DP.2_dedup))
+a$DP.1_dedup_flt=as.numeric(as.character(a$DP.1_dedup_flt));a$DP.2_dedup_flt=as.numeric(as.character(a$DP.2_dedup_flt))
+
+a[is.na(a)]=0
+OL_1cor=cor(a,method = c("pearson"))
+x3=pheatmap(OL_1cor, cluster_rows = F,cluster_cols = F,display_numbers=T,fontsize_number=10,fontsize = 8,angle_col=45, cellwidth = 30, cellheight = 30,cutree_cols=NA, col=colP,main="All Genes \n Log Transformed")
+```
+```{r include=F ,echo=F,warning=F,eval=F}
+
+## VenDiagram shows all possible Variants that overlap with Online coordinates (using bam range for each cordinate -1 through +1)
+######3
+a=OL3$V0
+# a=unique(c(OL_ADAR_1_es[,"V0"],OL_ADAR_2_es[,"V0"]));
+# a=OL3[OL3$DE==1,'V0']
+b=unique(c(ADAR_1_RZR_dedup_flt[,"V0"],ADAR_2_RZR_dedup_flt[,"V0"]));
+  # b=b[is.na(b)==F]
+c=unique(c(ADAR_1_RZR_dedup[,"V0"],ADAR_2_RZR_dedup[,"V0"]));
+  # c=c[is.na(c)==F]
+
+OVLG_all=unique(c(a,b,c))
+# OVLG_all=unique(c(b,c))
+  OVLG_all=OVLG_all[is.na(OVLG_all)==F]
+
+a=OVLG_all%in%a
+b=OVLG_all%in%b
+c=OVLG_all%in%c
+C3=cbind(a,b,c)
+# C3=cbind(b,c)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','IdentifiedVariants_filtered' ,'IdentifiedVariants_unfiltered')
+# rownames(C3)=OVLG_all;colnames(C3)=c('IdentifiedVariants_filtered' ,'IdentifiedVariants_unfiltered')
+{vennDiagram(vennCounts(C3),
+            circle.col = c("red", "blue", "green3"),
+            cex = 1)
+  title('Filtered data refer to freebayes filters')}
+
+remove(a,b,c,OVLG_all,C3)
+```
+
+```{r include=T ,echo=F,warning=F,eval=T}
+## VenDiagram shows only Variants At positions that overlap exactly with Example data
+### criteria: Read dpeth >0
+
+a=OL3$V0
+b=c(OL3[OL3$DP.1_dedup_flt>0&(is.na(OL3$DP.1_dedup_flt)==F),"V0"],OL3[OL3$DP.2_dedup_flt>0&(is.na(OL3$DP.2_dedup_flt)==F),"V0"]);
+  # b=b[is.na(b)==F]
+c=c(OL3[OL3$DP.1_dedup>0&(is.na(OL3$DP.1_dedup)==F),"V0"],OL3[OL3$DP.2_dedup>0&(is.na(OL3$DP.2_dedup)==F),"V0"]);
+  # c=c[is.na(c)==F]
+d=OL3[OL3$DE==1,'V0']
+
+OVLG_all=unique(c(a,b,c))
+# OVLG_all=unique(c(a,b,c,d))
+
+  OVLG_all=OVLG_all[is.na(OVLG_all)==F]
+
+a=OVLG_all%in%a
+b=OVLG_all%in%b
+c=OVLG_all%in%c
+# d=OVLG_all%in%d
+
+C3=cbind(a,b,c)
+# C3=cbind(a,b,c,d)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','IdentifiedVariants_filtered' ,'IdentifiedVariants_unfiltered')
+# rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','IdentifiedVariants_filtered' ,'IdentifiedVariants_unfiltered','DE Genes')
+
+{vennDiagram(vennCounts(C3),
+            circle.col = c("red", "blue", "green3",'orange'),
+            cex = 1)
+remove(a,b,c,OVLG_all,C3)
+  title('Filtered data refer to freebayes filters')}
+
+
+```
+
+
+ 
+```{r include=T ,echo=F,warning=F,eval=T}
+a=OL3$V0
+b=c(OL3[OL3$DP.1_dedup_flt>0&(is.na(OL3$DP.1_dedup_flt)==F),"V0"],OL3[OL3$DP.2_dedup_flt>0&(is.na(OL3$DP.2_dedup_flt)==F),"V0"]);
+c=c(OL3[OL3$DP.1_dedup>0&(is.na(OL3$DP.1_dedup)==F),"V0"],OL3[OL3$DP.2_dedup>0&(is.na(OL3$DP.2_dedup)==F),"V0"]);
+
+OVLG_all=unique(c(a,b,c))
+  OVLG_all=OVLG_all[is.na(OVLG_all)==F]
+
+aa=OVLG_all%in%a
+bb=OVLG_all%in%b
+cc=OVLG_all%in%c
+# d=OVLG_all%in%d
+
+C3=cbind(aa,bb,cc)
+
+OL3=OL3
+OL3$filter=NA
+OL3[OL3$V0%in%(OVLG_all[C3[,'aa']==T&C3[,'bb']==F&C3[,'cc']==T]),'filter']='lost by Freebayes count filter'
+OL3[OL3$V0%in%(OVLG_all[C3[,'aa']==T&C3[,'bb']==T&C3[,'cc']==T]),'filter']='No loss'
+OL3[OL3$V0%in%(OVLG_all[C3[,'aa']==T&C3[,'bb']==F&C3[,'cc']==F]),'filter']='Not Identified'
+
+
+# OL3=OL3[OL3$filter!='No loss',]
+ggplot(OL3, aes(x=filter, y=avgV4, fill=filter)) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+    geom_jitter(color="black", size=0.7, alpha=0.9) +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11)
+    ) +
+   ggtitle("Editing count") +
+    xlab("")+ylab("Average Editing count (Example Data)")+ylim(0,40)+
+    annotate('text',x=3,y=35,label="Rare variant counts\nAverave values all under 2")+
+    annotate('text',x=1,y=35,label="Mostly rare variant counts\nValues > 2 were removed\nbecause editing freq <0.1")+
+    annotate('text',x=2,y=35,label="Low values < 2 still kept because\nediting ratio > .1 \n average values lower because \nhigh in only one sample ")
+
+
+# OL3=OL3[OL3$filter!='No loss',]
+ggplot(OL3, aes(x=filter, y=avgV5, fill=filter)) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+    geom_jitter(color="black", size=0.7, alpha=0.9) +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11)
+    ) +
+     ggtitle("Total count") +
+    xlab("")+ylab("Average count (Example Data)")
+
+# OL3=OL3[OL3$filter!='No loss',]
+ggplot(OL3, aes(x=filter, y=avg_editing_ratio, fill=filter)) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+    geom_jitter(color="black", size=0.7, alpha=0.9) +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11)
+    ) +
+    ggtitle("Editing ratio") +
+    xlab("")+ylab("Average Editing Ratio (Example Data)")
+
+
+
+```
+```{r include=F ,echo=F,warning=F,eval=T}
+x=OL3[,c('V0','V1','V2','V3','avgV4','avgV5','filter')]
+colnames(x)=c('Location','chr','coordinate','Editing_type','editng_Count(average)','Total_count(average)','filter')
+write.table(x,file=("./data/AverageExprssion_Exampledata_freebayescounts.txt"), sep = "\t", row.names = FALSE, col.names = T, append = F, quote= FALSE)
+
+```
+data_table:
+[AverageExprssion_Exampledata_freebayescounts.txt](./data/AverageExprssion_Exampledata_freebayescounts.txt)  
+<br>  
+
+
+Missed Editing sites reflect the imposed filters when calling variants.  
+Variants that were not detected have editing count less then 2 in online example.  
+
+```{r include=F ,echo=F,warning=F,eval=F}
+
+# The Variant lost after Freebayes with filters is a result of low allele frequency  
+# eg. chr2:24223463   
+# Online Data : Coverage = 17, editing count = 2  
+# Custom Call: Coverage = 25, editing count = 2 - so below eding frequency  
+```
+
+```{r include=F ,echo=F,warning=F,eval=T}
+
+# plot_multi_histogram <- function(df, feature, label_column) {
+#     plt <- ggplot(df, aes(x=eval(parse(text=feature)), fill=eval(parse(text=label_column)))) +
+#     geom_histogram(alpha=0.7, position="identity", aes(y = ..density..), color="black") +
+#     geom_density(alpha=0.7) +
+#     geom_vline(aes(xintercept=mean(eval(parse(text=feature)))), color="black", linetype="dashed", size=1) +
+#     labs(x=feature, y = "Density")
+#     plt + guides(fill=guide_legend(title=label_column))
+# }
+# plot_multi_histogram(OL3,'avgV4','filter')+xlim(0,10)
+
+OL30=OL3
+# OL30=OL30[OL30$filter!='No loss',]
+OL30[is.na(OL30)]=0
+ggplot(OL3, aes(x=DP_dedup, y=avgV5, color=filter)) +
+    geom_point() +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+    theme(
+      plot.title = element_text(size=11)
+    )
+    # ggtitle("Editing count") +
+
+ggplot(OL3, aes(x=AO_dedup, y=avgV4, color=filter)) +
+    geom_point() +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+    theme(
+      plot.title = element_text(size=11)
+    )
+ggplot(OL3, aes(x=AO_dedup, y=avgV4, color=filter,size=filter)) +
+    geom_point() +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+  scale_size_manual(values = c(5,3,1))+
+    theme(
+      plot.title = element_text(size=11)
+    ) +xlim(0,5)+ylim(0,5)
+
+
+```
+```{r include=F ,echo=F,warning=F,eval=F}
+
+ex=OL3[OL3$filter=='lost by Freebayes minimum count filter',]
+View(ex[ex$DP_dedup>20,])
+ex2=OL3[OL3$filter=='No loss',]
+# View(ex2[ex2$DP_dedup>5|ex2$DP_dedup<20,])
+
+{plot(ex$avgV4,ex$AO_dedup)
+points(ex2$avgV4,ex2$AO_dedup,col='red',pch=20)}
+
+xxx
+```
+
+```{r include=F ,echo=F,warning=F,eval=T}
+
+## VenDiagram shows only Variants At Identified Example
+
+a=OL3$V0
+b=c(OL3[OL3$DP.1_dedup_flt>0&(is.na(OL3$DP.1_dedup_flt)==F),"V0"],OL3[OL3$DP.2_dedup_flt>0&(is.na(OL3$DP.2_dedup_flt)==F),"V0"]);
+  # b=b[is.na(b)==F]
+# c=c(OL3[OL3$DP.1_dedup>0&(is.na(OL3$DP.1_dedup)==F),"V0"],OL3[OL3$DP.2_dedup>0&(is.na(OL3$DP.2_dedup)==F),"V0"]);
+  # c=c[is.na(c)==F]
+d=OL3[OL3$DE==1,'V0']
+OVLG_all=unique(c(a,b,d))
+# OVLG_all=unique(c(a,b,c,d))
+
+  OVLG_all=OVLG_all[is.na(OVLG_all)==F]
+
+a=OVLG_all%in%a
+b=OVLG_all%in%b
+# c=OVLG_all%in%c
+d=OVLG_all%in%d
+
+# C3=cbind(a,b,c,d)
+C3=cbind(a,b,d)
+
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','IdentifiedVariants_filtered' ,"Example_DE")
+# rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','IdentifiedVariants_filtered' ,'IdentifiedVariants_unfiltered',"Example_DE")
+#
+vennDiagram(vennCounts(C3),
+            circle.col = c("red", "blue",'orange'),
+            cex = .9)
+remove(a,b,d,OVLG_all,C3)
+
+
+```
+
+The count filters remove rare editing sites that were detected in Example data.  
+The biggest effect on our ability to count variants appears to be the remove duplicates procedure.  
+
+<br>  
+
+
+**Sample to Sample compairison**  
+To simplify comparison going forward only compare counts for one sample.   
+  
+Filter online sites by GIREMI criteria to ensure that remaining sites are most likely editing sites identified from ADAR1-sample1.  
+
+Criteria:  
+Variant read count > 1   
+total read depth > 5   
+variant frequency > 10%  
+
+
+```{r include=T ,echo=F,warning=F,eval=T}
+#
+# filter Online SNP Data:
+# 1) eding counts less <3 (Lee et.al 2013)
+# 2) or editing Freq less then .1 and min coveage less than 5 (Zhang et.al 2015) also how I ran freebayes
+OL3_1=OL3
+
+OL3_1=OL3_1[OL3_1$V5.1>5,]
+OL3_1=OL3_1[OL3_1$V4.1>2,]
+OL3_1=OL3_1[OL3_1$editing_ratio.1>.1,]
+
+# OL30_1=OL30[OL30$V5.1>5&OL30$editing_ratio.1>.1,]
+OL30_1=OL3_1
+OL30_1[is.na(OL30_1)]=0
+
+```
+```{r include=F ,echo=F,warning=F,eval=T}
+
+a=OL30_1$V0
+b=c(OL30_1[OL30_1$AO.2_dedup_flt>0,"V0"]);
+  b=b[is.na(b)==F]
+c=c(OL30_1[OL30_1$AO.2_dedup>0,"V0"]);
+  c=c[is.na(c)==F]
+# d=OL30_1[OL30_1$DE==1,'V0']
+#   d=d[is.na(d)==F]
+
+OVLG_all=unique(c(a,b,c))
+# OVLG_all=unique(c(a,b,c,d))
+
+  OVLG_all=OVLG_all[is.na(OVLG_all)==F]
+
+a=OVLG_all%in%a
+b=OVLG_all%in%b
+c=OVLG_all%in%c
+# d=OVLG_all%in%d
+
+C3=cbind(a,b,c)
+# C3=cbind(a,b,c,d)
+
+OL30_1[OL30_1$V0%in%(OVLG_all[C3[,'a']==T&C3[,'b']==F&C3[,'c']==T]),'filter']='lost by filter'
+OL30_1[OL30_1$V0%in%(OVLG_all[C3[,'a']==T&C3[,'b']==T&C3[,'c']==T]),'filter']='No loss'
+OL30_1[OL30_1$V0%in%(OVLG_all[C3[,'a']==T&C3[,'b']==F&C3[,'c']==F]),'filter']='Not Identified'
+
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','IdentifiedVariants_filtered' ,'IdentifiedVariants_unfiltered')
+# rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','IdentifiedVariants_filtered' ,'IdentifiedVariants_unfiltered','DE Genes')
+
+{vennDiagram(vennCounts(C3),
+            circle.col = c("red", "blue", "green3",'orange'),
+            cex = 1)
+  title('Filtered data refer to freebayes filters')}
+
+
+remove(a,b,c,OVLG_all,C3)
+
+
+
+ggplot(OL30_1, aes(x=DP.2_dedup, y=V5.1, color=filter,size=filter)) +
+    geom_point() +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+  scale_size_manual(values = c(5,3,1))+
+  scale_color_manual(values = c('red','green','black'))+
+    theme(
+      plot.title = element_text(size=11,hjust = 0.5)
+    ) +
+   ggtitle("Comparing Total Read count")
+
+
+ggplot(OL30_1, aes(x=DP.2_dedup, y=V5.1, color=filter,size=filter)) +
+    geom_point() +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+  scale_size_manual(values = c(5,3,1))+
+  scale_color_manual(values = c('red','green','black'))+
+    annotate("text",label='Variants  in both Online example and custom calculation \n filter variants with < 5 reads\n\n Variants not detected by Custom calculation have <=2 Editing reads in online data ',x=6,y=1.5)+
+    theme(
+      plot.title = element_text(size=11,hjust = 0.5)
+    ) +xlim(0,30)+ylim(0,30)+
+   ggtitle("Comparing Total Read count")
+
+
+ggplot(OL30_1, aes(x=AO.2_dedup, y=V4.1, color=filter,size=filter)) +
+    geom_point() +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+  scale_size_manual(values = c(5,3,1))+
+  scale_color_manual(values = c('red','green','black'))+
+    theme(
+      plot.title = element_text(size=11,hjust = 0.5)
+    ) +ggtitle("Comparing Editing count")
+
+
+ggplot(OL30_1, aes(x=AO.2_dedup, y=V4.1, color=filter,size=filter)) +
+    geom_point() +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+  scale_size_manual(values = c(5,3,1))+
+  scale_color_manual(values = c('red','green','black'))+
+    annotate("text",label='Variants not removed by filter with editing <= 2\n removed because low editing freq.',x=7,y=1.2)+
+    theme(
+      plot.title = element_text(size=11,hjust = 0.5)
+    ) +xlim(0,10)+ylim(0,10)+
+     ggtitle("Comparing Editing count")
+
+
+# View(OL30_1[OL30_1$AO.2_dedup<3,])
+
+
+# ggplot(OL30_1, aes(x=DP.2_dedup, y=AO.2_dedup, color=filter,size=filter)) +
+#     geom_point() +
+#     scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+#   scale_size_manual(values = c(5,3,1))+
+#   scale_color_manual(values = c('red','green','black'))+
+#     theme(
+#       plot.title = element_text(size=11,hjust = 0.5)
+#     ) #+xlim(0,5)+ylim(0,5)
+#     # ggtitle("Editing count") +
+
+
+
+ggplot(OL30_1, aes(x=DP.2_dedup, y=editing_ratio.2_dedup, color=filter,size=filter)) +
+    geom_point() +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+  scale_size_manual(values = c(5,3,1))+
+  scale_color_manual(values = c('red','green','black'))+
+      annotate("text",label='Most Variants not removed by Editing ratio filter',x=60,y=.6)+
+
+    theme(
+      plot.title = element_text(size=11,hjust = 0.5)
+    ) +
+     ggtitle("Compare variant filter elements")
+
+```
+
+
+```{r include=F ,echo=F,warning=F,eval=T}
+
+## VenDiagram shows only Variants At Identified Example
+
+a=OL30_1$V0
+b=c(OL30_1[OL30_1$AO.2_dedup_flt>0&(is.na(OL30_1$AO.2_dedup_flt)==F),"V0"]);
+  b=b[is.na(b)==F]
+# c=c(OL30_1[OL30_1$AO.1_dedup>0&(is.na(OL30_1$AO.1_dedup)==F),"V0"],OL30_1[OL30_1$AO.2_dedup>0&(is.na(OL30_1$AO.2_dedup)==F),"V0"]);
+  # c=c[is.na(c)==F]
+d=OL30_1[OL30_1$DE==1,'V0']
+  d=d[is.na(d)==F]
+
+OVLG_all=unique(c(a,b,d))
+# OVLG_all=unique(c(a,b,c,d))
+
+  OVLG_all=OVLG_all[is.na(OVLG_all)==F]
+
+a=OVLG_all%in%a
+b=OVLG_all%in%b
+# c=OVLG_all%in%c
+d=OVLG_all%in%d
+
+# C3=cbind(a,b,c,d)
+C3=cbind(a,b,d)
+
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','IdentifiedVariants_filtered' ,"Example_DE")
+# rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','IdentifiedVariants_filtered' ,'IdentifiedVariants_unfiltered',"Example_DE")
+#
+vennDiagram(vennCounts(C3),
+            circle.col = c("red", "blue",'orange'),
+            cex = .9)
+remove(a,b,d,OVLG_all,C3)
+
+```
+```{r include=F ,echo=F,warning=F,eval=T}
+
+{plot(OL30_1$DP.2_dedup,OL30_1$DP.2_dedup_flt,xlab="No Filter",ylab="Filtered",main="Alternative Editing count",pch=20)
+  abline(a=0,b=1)}
+
+```
+
+
+## Test SNV location filters    
+
+**“dbSNP” filter:** removes RDDs annotated as SNPs (dbSNP 135);  
+**“homopolymer” filter:** removes sites in homopolyer runs of ≥5 bp;  
+**“splice site” filter:** removes intronic RDDs within 4 bp of splice junctions;  
+**“simple repeat” filter:** discards sites in simple repeats;  
+
+<br>  
+```{r include=F ,echo=F,warning=F,eval=T}
+
+### Check “dbSNP” filter: removes RDDs annotated as SNPs (dbSNP 135)
+
+# First looking at Example RNA eding locations only
+# appears to be slight descrepancy where 25 locations overlap with example data
+# but when looking at all locations only 23 locations overlap
+# could be that the 2 other locations are not AtoG locations but not sure so only plotting All location data to make sure no confusion
+
+# Additionally the het filter does not remove the known locations for Example locations only
+```
+
+```{r include=F ,echo=F,warning=F,eval=T}
+### Use Freebayes to call Variants with filters + Annotate
+
+ADAR_1_RZR_dedup_fltano=read.delim(paste0("../RASER/HepG2_ADAR_ENCLB012QRD.dedup_filter_OLchr2testdata_anoEnsm_anoEnsm.mrksnpEns.txt"), header=F, sep="\t",stringsAsFactors = F)
+ADAR_2_RZR_dedup_fltano=read.delim(paste0("../RASER/HepG2_ADAR_ENCLB918BSZ.dedup_filter_OLchr2testdata_anoEnsm_anoEnsm.mrksnpEns.txt"), header=F, sep="\t",stringsAsFactors = F)
+
+ADAR_1_RZR_dedup_fltano$V0=paste0(ADAR_1_RZR_dedup_fltano$V1,":",ADAR_1_RZR_dedup_fltano$V3)
+ADAR_2_RZR_dedup_fltano$V0=paste0(ADAR_2_RZR_dedup_fltano$V1,":",ADAR_2_RZR_dedup_fltano$V3)
+
+
+  ADAR_1_RZR_dedup_fltano <- ADAR_1_RZR_dedup_fltano[(duplicated(ADAR_1_RZR_dedup_fltano)==F),]
+  ADAR_2_RZR_dedup_fltano <- ADAR_2_RZR_dedup_fltano[(duplicated(ADAR_2_RZR_dedup_fltano)==F),]
+
+
+  #### remove locations in table that were removed for editing frequency
+  ADAR_1_RZR_dedup_fltano=ADAR_1_RZR_dedup_fltano[(ADAR_1_RZR_dedup_fltano$V0%ni%ADAR_1_RZR_dedup_fltbyER),]
+  ADAR_2_RZR_dedup_fltano=ADAR_2_RZR_dedup_fltano[(ADAR_2_RZR_dedup_fltano$V0%ni%ADAR_2_RZR_dedup_fltbyER),]
+
+  # ADAR_1_RZR_dedup_fltano=ADAR_1_RZR_dedup_fltano[ADAR_1_RZR_dedup_fltano$V0%in%ADAR_1_RZR_dedup_flt$V0,]
+  # ADAR_2_RZR_dedup_fltano=ADAR_2_RZR_dedup_fltano[ADAR_2_RZR_dedup_fltano$V0%in%ADAR_2_RZR_dedup_flt$V0,]
+########
+  # nrow(ADAR_1_RZR_dedup_flt)
+  # nrow(ADAR_1_RZR_dedup_fltano)
+
+
+```
+
+
+```{r include=F ,echo=F,warning=F,eval=T}
+
+OL3_1=merge(OL3_1,ADAR_1_RZR_dedup_fltano[,c("V0","V5","V6")],all.x=T,by="V0")
+OL3_1=merge(OL3_1,ADAR_2_RZR_dedup_fltano[,c("V0","V5","V6")],all.x=T,by="V0",suffixes=c(".1_dedup_fltano",".2_dedup_fltano"))
+
+OL3_1=OL3_1[duplicated(OL3_1)==F,]
+
+OL30_1=OL3_1
+OL30_1[is.na(OL30_1)]=0
+
+```
+```{r ,fig.show='hold', include=F,echo=FALSE,message=FALSE,warning=FALSE,cache=F}
+a=OL3_1$V0
+# a=OL3_1[OL3_1$DE==1,'V0']
+
+b=unique(c(OL3_1[OL3_1$V5.2_dedup_fltano%in%1,"V0"]))
+  b=b[is.na(b)==F]
+c=unique(c(OL3_1[OL3_1$V5.2_dedup_fltano%in%0,"V0"]))
+  c=c[is.na(c)==F]
+
+OVLG_all=unique(c(a,b,c))
+a=OVLG_all%in%a
+b=OVLG_all%in%b
+c=OVLG_all%in%c
+C3=cbind(a,b,c)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','Annotated_SNP','NoAnnot_SNP')
+{vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c("red", "blue", "green3"),
+            main="Test SNP Annot Database")
+  text(1,3.01,"If correct DB no Ediing sites should\n appear in Annotated_SNP",cex=.7)
+}
+
+
+```
+
+```{r include=F ,echo=F,warning=F,eval=F}
+
+# ### Use Freebayes to call Variants with filters + Annotate + select SNP heterozygous SNV
+# 
+# Check step to select SNP and heterozygous SNV
+# <br>
+# 
+# bcftools view --types snps /data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/041420/HepG2_ADAR_ENCLB012QRD.dedup_filter.vcf | bcftools view --exclude-types indels,mnps,ref,bnd,other > /data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/041420/HepG2_ADAR_ENCLB012QRD.dedup_filter.snps.vcf
+# <br>
+# 
+#  bcftools view -g ^hom  /data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/041420/HepG2_ADAR_ENCLB012QRD.dedup_filter.snps.vcf > /data/RBL_NCI/Wolin/Phil/RNAEdit_test/RNAEdit_test/RASER/041420/HepG2_ADAR_ENCLB012QRD.dedup_filter.snps.het.vcf
+# 
+# <br>
+```
+
+```{r include=F ,echo=F,warning=F,eval=T}
+
+########
+  # nrow(ADAR_1_RZR_dedup_flt)
+  # nrow(ADAR_1_RZR_dedup_fltanosnp)
+
+ADAR_1_RZR_dedup_fltanosnp_vcf <- read.vcfR( "../RASER/HepG2_ADAR_ENCLB012QRD.dedup_filter_OLchr2testdata.snps_anoEnsm.vcf", verbose = FALSE )
+ADAR_2_RZR_dedup_fltanosnp_vcf <- read.vcfR( "../RASER/HepG2_ADAR_ENCLB918BSZ.dedup_filter_OLchr2testdata.snps_anoEnsm.vcf", verbose = FALSE )
+
+ADAR_1_RZR_dedup_fltanosnp_vcf@meta[grepl("command",(ADAR_1_RZR_dedup_fltanosnp_vcf@meta))]
+
+
+  ADAR_1_RZR_dedup_fltanosnp_vcf <- cbind(as.data.frame(getFIX(ADAR_1_RZR_dedup_fltanosnp_vcf)), INFO2df(ADAR_1_RZR_dedup_fltanosnp_vcf))
+  ADAR_2_RZR_dedup_fltanosnp_vcf <- cbind(as.data.frame(getFIX(ADAR_2_RZR_dedup_fltanosnp_vcf)), INFO2df(ADAR_2_RZR_dedup_fltanosnp_vcf))
+
+ ADAR_1_RZR_dedup_fltanosnp_vcfOG = ADAR_1_RZR_dedup_fltanosnp_vcf
+ ADAR_2_RZR_dedup_fltanosnp_vcfOG = ADAR_2_RZR_dedup_fltanosnp_vcf
+
+
+ ##################
+ ADAR_1_RZR_dedup_fltanosnp_vcf=ADAR_1_RZR_dedup_fltanosnp_vcf[ADAR_1_RZR_dedup_fltanosnp_vcf$CHROM=="chr2",]
+ADAR_2_RZR_dedup_fltanosnp_vcf=ADAR_2_RZR_dedup_fltanosnp_vcf[ADAR_2_RZR_dedup_fltanosnp_vcf$CHROM=="chr2",]
+ADAR_1_RZR_dedup_fltanosnp_vcf=ADAR_1_RZR_dedup_fltanosnp_vcf[grep("snp",ADAR_1_RZR_dedup_fltanosnp_vcf$TYPE),]
+ADAR_2_RZR_dedup_fltanosnp_vcf=ADAR_2_RZR_dedup_fltanosnp_vcf[grep("snp",ADAR_2_RZR_dedup_fltanosnp_vcf$TYPE),]
+
+ADAR_1_RZR_dedup_fltanosnp_vcf$AO=as.numeric(ADAR_1_RZR_dedup_fltanosnp_vcf$AO)
+ADAR_1_RZR_dedup_fltanosnp_vcf$DP=as.numeric(ADAR_1_RZR_dedup_fltanosnp_vcf$DP)
+ADAR_2_RZR_dedup_fltanosnp_vcf$AO=as.numeric(ADAR_2_RZR_dedup_fltanosnp_vcf$AO)
+ADAR_2_RZR_dedup_fltanosnp_vcf$DP=as.numeric(ADAR_2_RZR_dedup_fltanosnp_vcf$DP)
+
+ADAR_1_RZR_dedup_fltanosnp_vcf$V0=paste0(ADAR_1_RZR_dedup_fltanosnp_vcf$CHROM,':',ADAR_1_RZR_dedup_fltanosnp_vcf$POS)
+ADAR_2_RZR_dedup_fltanosnp_vcf$V0=paste0(ADAR_2_RZR_dedup_fltanosnp_vcf$CHROM,':',ADAR_2_RZR_dedup_fltanosnp_vcf$POS)
+
+
+### currently did not include freq filter so adding it in now
+ADAR_1_RZR_dedup_fltanosnp_vcf$editing_ratio=ADAR_1_RZR_dedup_fltanosnp_vcf$AO/ADAR_1_RZR_dedup_fltanosnp_vcf$DP
+ADAR_2_RZR_dedup_fltanosnp_vcf$editing_ratio=ADAR_2_RZR_dedup_fltanosnp_vcf$AO/ADAR_2_RZR_dedup_fltanosnp_vcf$DP
+
+ADAR_1_RZR_dedup_fltanosnp_vcfbyER=unique(ADAR_1_RZR_dedup_fltanosnp_vcf[(ADAR_1_RZR_dedup_fltanosnp_vcf$editing_ratio<=.1|is.na(ADAR_1_RZR_dedup_fltanosnp_vcf$editing_ratio)),'V0'])
+ADAR_2_RZR_dedup_fltanosnp_vcfbyER=unique(ADAR_2_RZR_dedup_fltanosnp_vcf[(ADAR_2_RZR_dedup_fltanosnp_vcf$editing_ratio<=.1|is.na(ADAR_2_RZR_dedup_fltanosnp_vcf$editing_ratio)),'V0'])
+
+
+ADAR_1_RZR_dedup_fltanosnp_vcf=ADAR_1_RZR_dedup_fltanosnp_vcf[((ADAR_1_RZR_dedup_fltanosnp_vcf$editing_ratio>.1)),]
+ADAR_1_RZR_dedup_fltanosnp_vcf=ADAR_1_RZR_dedup_fltanosnp_vcf[is.na(ADAR_1_RZR_dedup_fltanosnp_vcf$V0)==F,]
+ADAR_2_RZR_dedup_fltanosnp_vcf=ADAR_2_RZR_dedup_fltanosnp_vcf[((ADAR_2_RZR_dedup_fltanosnp_vcf$editing_ratio>.1)),]
+ADAR_2_RZR_dedup_fltanosnp_vcf=ADAR_2_RZR_dedup_fltanosnp_vcf[is.na(ADAR_2_RZR_dedup_fltanosnp_vcf$V0)==F,]
+#################
+
+
+ADAR_1_RZR_dedup_fltanosnp_vcf=ADAR_1_RZR_dedup_fltanosnp_vcf[grepl('A',ADAR_1_RZR_dedup_fltanosnp_vcf$REF)&grepl('G',ADAR_1_RZR_dedup_fltanosnp_vcf$ALT)|grepl('T',ADAR_1_RZR_dedup_fltanosnp_vcf$REF)&grepl('C',ADAR_1_RZR_dedup_fltanosnp_vcf$ALT),]
+ADAR_2_RZR_dedup_fltanosnp_vcf=ADAR_2_RZR_dedup_fltanosnp_vcf[grepl('A',ADAR_2_RZR_dedup_fltanosnp_vcf$REF)&grepl('G',ADAR_2_RZR_dedup_fltanosnp_vcf$ALT)|grepl('T',ADAR_2_RZR_dedup_fltanosnp_vcf$REF)&grepl('C',ADAR_2_RZR_dedup_fltanosnp_vcf$ALT),]
+#
+  ADAR_1_RZR_dedup_fltanosnp_vcf <- ADAR_1_RZR_dedup_fltanosnp_vcf[(duplicated(ADAR_1_RZR_dedup_fltanosnp_vcf)==F),]
+  ADAR_2_RZR_dedup_fltanosnp_vcf <- ADAR_2_RZR_dedup_fltanosnp_vcf[(duplicated(ADAR_2_RZR_dedup_fltanosnp_vcf)==F),]
+
+```
+```{r include=F ,echo=F,warning=F,eval=T}
+ADAR_1_RZR_dedup_fltanosnp=read.delim(paste0("../RASER/HepG2_ADAR_ENCLB012QRD.dedup_filter_OLchr2testdata.snps_anoEnsm.mrksnpEns.txt"), header=F, sep="\t",stringsAsFactors = F)
+ADAR_2_RZR_dedup_fltanosnp=read.delim(paste0("../RASER/HepG2_ADAR_ENCLB918BSZ.dedup_filter_OLchr2testdata.snps_anoEnsm.mrksnpEns.txt"), header=F, sep="\t",stringsAsFactors = F)
+
+ADAR_1_RZR_dedup_fltanosnp$V0=paste0(ADAR_1_RZR_dedup_fltanosnp$V1,":",ADAR_1_RZR_dedup_fltanosnp$V3)
+ADAR_2_RZR_dedup_fltanosnp$V0=paste0(ADAR_2_RZR_dedup_fltanosnp$V1,":",ADAR_2_RZR_dedup_fltanosnp$V3)
+
+  # sum(duplicated(ADAR_1_RZR_dedup_fltanosnp$V0))
+  # sum(duplicated(ADAR_2_RZR_dedup_fltanosnp$V0))
+  #
+  ADAR_1_RZR_dedup_fltanosnp <- ADAR_1_RZR_dedup_fltanosnp[(duplicated(ADAR_1_RZR_dedup_fltanosnp)==F),]
+  ADAR_2_RZR_dedup_fltanosnp <- ADAR_2_RZR_dedup_fltanosnp[(duplicated(ADAR_2_RZR_dedup_fltanosnp)==F),]
+
+  #### remove locations in table that were removed for editing frequency
+  ADAR_1_RZR_dedup_fltanosnp=ADAR_1_RZR_dedup_fltanosnp[(ADAR_1_RZR_dedup_fltanosnp$V0%ni%ADAR_1_RZR_dedup_fltanosnp_vcfbyER),]
+  ADAR_2_RZR_dedup_fltanosnp=ADAR_2_RZR_dedup_fltanosnp[(ADAR_2_RZR_dedup_fltanosnp$V0%ni%ADAR_2_RZR_dedup_fltanosnp_vcfbyER),]
+
+```
+
+```{r include=F ,echo=F,warning=F,eval=T}
+if(sum(colnames(OL3_1)%in%c("V5.1_dedup_fltanosnp"))>0){OL3_1=OL3_1[colnames(OL3_1)%in%c(paste0(c("V5","V6"),".1_dedup_fltanosnp"),paste0(c("V5","V6"),".2_dedup_fltanosnp"),paste0(c("DP","AO"),".1_dedup_fltanosnp"),paste0(c("DP","AO"),".2_dedup_fltanosnp"))==F]}
+
+# OL3_1=merge(OL3_1,ADAR_1_RZR_dedup_fltanosnp[,c("V0","V5","V6")],all.x=T,by="V0")
+# OL3_1=merge(OL3_1,ADAR_2_RZR_dedup_fltanosnp[,c("V0","V5","V6")],all.x=T,by="V0",suffixes=c(".1_dedup_fltanosnp",".2_dedup_fltanosnp"))
+
+OL3_1=merge(OL3_1,ADAR_1_RZR_dedup_fltanosnp_vcf[,c("V0","DP","AO",'editing_ratio')],all.x=T,by="V0")
+OL3_1=merge(OL3_1,ADAR_2_RZR_dedup_fltanosnp_vcf[,c("V0","DP","AO",'editing_ratio')],all.x=T,by="V0",suffixes=c(".1_dedup_fltanosnp",".2_dedup_fltanosnp"))
+
+OL3_1=OL3_1[duplicated(OL3_1)==F,]
+OL30_1=OL3_1
+OL30_1[is.na(OL30_1)]=0
+
+
+```
+```{r ,fig.show='hold', include=F,echo=FALSE,message=FALSE,warning=FALSE,cache=F}
+a=OL3_1$V0
+# a=OL3_1[OL3_1$DE==1,'V0']
+b=unique(c(OL3_1[OL3_1$editing_ratio.2_dedup_fltanosnp>0,"V0"]))
+  b=b[is.na(b)==F]
+c=unique(c(OL3_1[OL3_1$editing_ratio.2_dedup_fltano>0,"V0"]))
+  c=c[is.na(c)==F]
+
+OVLG_all=unique(c(a,b,c))
+a=OVLG_all%in%a
+b=OVLG_all%in%b
+c=OVLG_all%in%c
+C3=cbind(a,b,c)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','SNP Filter','no SNP Filter')
+{vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c("red", "blue", "green3"))
+  text(1,3.01,"No locations lost by SNP filter",cex=.7)
+}
+
+
+
+
+```
+
+
+
+
+```{r include=F ,echo=F,warning=F,eval=T}
+OL3_1xx=OL3_1
+
+```
+
+```{r include=F ,echo=F,warning=F,eval=T}
+OL3_1=OL3_1xx
+
+ADAR_1_RZR_dedup_fltanosnphet_vcf <- read.vcfR( "../RASER/HepG2_ADAR_ENCLB012QRD.dedup_filter_OLchr2testdata.snps.het_anoEnsm.vcf", verbose = FALSE )
+ADAR_2_RZR_dedup_fltanosnphet_vcf <- read.vcfR( "../RASER/HepG2_ADAR_ENCLB918BSZ.dedup_filter_OLchr2testdata.snps.het_anoEnsm.vcf", verbose = FALSE )
+
+ADAR_1_RZR_dedup_fltanosnphet_vcf@meta[grepl("command",(ADAR_1_RZR_dedup_fltanosnphet_vcf@meta))]
+
+
+  ADAR_1_RZR_dedup_fltanosnphet_vcf <- cbind(as.data.frame(getFIX(ADAR_1_RZR_dedup_fltanosnphet_vcf)), INFO2df(ADAR_1_RZR_dedup_fltanosnphet_vcf))
+  ADAR_2_RZR_dedup_fltanosnphet_vcf <- cbind(as.data.frame(getFIX(ADAR_2_RZR_dedup_fltanosnphet_vcf)), INFO2df(ADAR_2_RZR_dedup_fltanosnphet_vcf))
+
+ADAR_1_RZR_dedup_fltanosnphet_vcfOG = ADAR_1_RZR_dedup_fltanosnphet_vcf
+ADAR_2_RZR_dedup_fltanosnphet_vcfOG = ADAR_2_RZR_dedup_fltanosnphet_vcf
+
+
+ ##################
+ ADAR_1_RZR_dedup_fltanosnphet_vcf=ADAR_1_RZR_dedup_fltanosnphet_vcf[ADAR_1_RZR_dedup_fltanosnphet_vcf$CHROM=="chr2",]
+ADAR_2_RZR_dedup_fltanosnphet_vcf=ADAR_2_RZR_dedup_fltanosnphet_vcf[ADAR_2_RZR_dedup_fltanosnphet_vcf$CHROM=="chr2",]
+ADAR_1_RZR_dedup_fltanosnphet_vcf=ADAR_1_RZR_dedup_fltanosnphet_vcf[grep("snp",ADAR_1_RZR_dedup_fltanosnphet_vcf$TYPE),]
+ADAR_2_RZR_dedup_fltanosnphet_vcf=ADAR_2_RZR_dedup_fltanosnphet_vcf[grep("snp",ADAR_2_RZR_dedup_fltanosnphet_vcf$TYPE),]
+
+ADAR_1_RZR_dedup_fltanosnphet_vcf$AO=as.numeric(ADAR_1_RZR_dedup_fltanosnphet_vcf$AO)
+ADAR_1_RZR_dedup_fltanosnphet_vcf$DP=as.numeric(ADAR_1_RZR_dedup_fltanosnphet_vcf$DP)
+ADAR_2_RZR_dedup_fltanosnphet_vcf$AO=as.numeric(ADAR_2_RZR_dedup_fltanosnphet_vcf$AO)
+ADAR_2_RZR_dedup_fltanosnphet_vcf$DP=as.numeric(ADAR_2_RZR_dedup_fltanosnphet_vcf$DP)
+
+ADAR_1_RZR_dedup_fltanosnphet_vcf$V0=paste0(ADAR_1_RZR_dedup_fltanosnphet_vcf$CHROM,':',ADAR_1_RZR_dedup_fltanosnphet_vcf$POS)
+ADAR_2_RZR_dedup_fltanosnphet_vcf$V0=paste0(ADAR_2_RZR_dedup_fltanosnphet_vcf$CHROM,':',ADAR_2_RZR_dedup_fltanosnphet_vcf$POS)
+
+
+### currently did not include freq filter so adding it in now
+ADAR_1_RZR_dedup_fltanosnphet_vcf$editing_ratio=ADAR_1_RZR_dedup_fltanosnphet_vcf$AO/ADAR_1_RZR_dedup_fltanosnphet_vcf$DP
+ADAR_2_RZR_dedup_fltanosnphet_vcf$editing_ratio=ADAR_2_RZR_dedup_fltanosnphet_vcf$AO/ADAR_2_RZR_dedup_fltanosnphet_vcf$DP
+
+ADAR_1_RZR_dedup_fltanosnphet_vcfbyER=unique(ADAR_1_RZR_dedup_fltanosnphet_vcf[(ADAR_1_RZR_dedup_fltanosnphet_vcf$editing_ratio<=.1|is.na(ADAR_1_RZR_dedup_fltanosnphet_vcf$editing_ratio)),'V0'])
+ADAR_2_RZR_dedup_fltanosnphet_vcfbyER=unique(ADAR_2_RZR_dedup_fltanosnphet_vcf[(ADAR_2_RZR_dedup_fltanosnphet_vcf$editing_ratio<=.1|is.na(ADAR_2_RZR_dedup_fltanosnphet_vcf$editing_ratio)),'V0'])
+
+
+ADAR_1_RZR_dedup_fltanosnphet_vcf=ADAR_1_RZR_dedup_fltanosnphet_vcf[((ADAR_1_RZR_dedup_fltanosnphet_vcf$editing_ratio>.1)),]
+ADAR_1_RZR_dedup_fltanosnphet_vcf=ADAR_1_RZR_dedup_fltanosnphet_vcf[is.na(ADAR_1_RZR_dedup_fltanosnphet_vcf$V0)==F,]
+ADAR_2_RZR_dedup_fltanosnphet_vcf=ADAR_2_RZR_dedup_fltanosnphet_vcf[((ADAR_2_RZR_dedup_fltanosnphet_vcf$editing_ratio>.1)),]
+ADAR_2_RZR_dedup_fltanosnphet_vcf=ADAR_2_RZR_dedup_fltanosnphet_vcf[is.na(ADAR_2_RZR_dedup_fltanosnphet_vcf$V0)==F,]
+#################
+
+ADAR_1_RZR_dedup_fltanosnphet_vcf=ADAR_1_RZR_dedup_fltanosnphet_vcf[grepl('A',ADAR_1_RZR_dedup_fltanosnphet_vcf$REF)&grepl('G',ADAR_1_RZR_dedup_fltanosnphet_vcf$ALT)|grepl('T',ADAR_1_RZR_dedup_fltanosnphet_vcf$REF)&grepl('C',ADAR_1_RZR_dedup_fltanosnphet_vcf$ALT),]
+ADAR_2_RZR_dedup_fltanosnphet_vcf=ADAR_2_RZR_dedup_fltanosnphet_vcf[grepl('A',ADAR_2_RZR_dedup_fltanosnphet_vcf$REF)&grepl('G',ADAR_2_RZR_dedup_fltanosnphet_vcf$ALT)|grepl('T',ADAR_2_RZR_dedup_fltanosnphet_vcf$REF)&grepl('C',ADAR_2_RZR_dedup_fltanosnphet_vcf$ALT),]
+#
+  ADAR_1_RZR_dedup_fltanosnphet_vcf <- ADAR_1_RZR_dedup_fltanosnphet_vcf[(duplicated(ADAR_1_RZR_dedup_fltanosnphet_vcf)==F),]
+  ADAR_2_RZR_dedup_fltanosnphet_vcf <- ADAR_2_RZR_dedup_fltanosnphet_vcf[(duplicated(ADAR_2_RZR_dedup_fltanosnphet_vcf)==F),]
+
+  ADAR_1_RZR_dedup_fltanosnphet_vcf$V0=paste0(ADAR_1_RZR_dedup_fltanosnphet_vcf$CHROM,':',ADAR_1_RZR_dedup_fltanosnphet_vcf$POS)
+  ADAR_2_RZR_dedup_fltanosnphet_vcf$V0=paste0(ADAR_2_RZR_dedup_fltanosnphet_vcf$CHROM,':',ADAR_2_RZR_dedup_fltanosnphet_vcf$POS)
+```
+```{r include=F ,echo=F,warning=F,eval=T}
+if(sum(colnames(OL3_1)%in%c("V5.1_dedup_fltanosnphet"))>0){OL3_1=OL3_1[colnames(OL3_1)%in%c(paste0(c("V5","V6"),".1_dedup_fltanosnphet"),paste0(c("V5","V6"),".2_dedup_fltanosnphet"))==F]}
+
+# OL3_1=merge(OL3_1,ADAR_1_RZR_dedup_fltanosnphet[,c("V0","V5","V6")],all.x=T,by="V0")
+# OL3_1=merge(OL3_1,ADAR_2_RZR_dedup_fltanosnphet[,c("V0","V5","V6")],all.x=T,by="V0",suffixes=c(".1_dedup_fltanosnphet",".2_dedup_fltanosnphet"))
+
+OL3_1=merge(OL3_1,ADAR_1_RZR_dedup_fltanosnphet_vcf[,c("V0","DP","AO",'editing_ratio')],all.x=T,by="V0")
+OL3_1=merge(OL3_1,ADAR_2_RZR_dedup_fltanosnphet_vcf[,c("V0","DP","AO",'editing_ratio')],all.x=T,by="V0",suffixes=c(".1_dedup_fltanosnphet",".2_dedup_fltanosnphet"))
+
+
+OL3_1=OL3_1[duplicated(OL3_1)==F,]
+OL30_1=OL3_1
+OL30_1[is.na(OL30_1)]=0
+
+
+```
+
+
+```{r ,fig.show='hold', include=F,echo=FALSE,message=FALSE,warning=FALSE,cache=F}
+
+a=OL3_1$V0
+# a=OL3_1[OL3_1$DE==1,'V0']
+b=unique(c(OL3_1[OL3_1$editing_ratio.2_dedup_fltanosnphet>0,"V0"]))
+  b=b[is.na(b)==F]
+c=unique(c(OL3_1[OL3_1$editing_ratio.2_dedup_fltanosnp>0,"V0"]))
+  c=c[is.na(c)==F]
+
+OVLG_all=unique(c(a,b,c))
+a=OVLG_all%in%a
+b=OVLG_all%in%b
+c=OVLG_all%in%c
+C3=cbind(a,b,c)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','after heterozygous Filter','before Filter')
+{vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c("red", "blue", "green3"))
+  text(1,3.01,"No locations lost by filter",cex=.7)
+}
+```
+
+
+```{r ,fig.show='hold', include=F,echo=FALSE,message=FALSE,warning=FALSE,cache=F}
+miss=rownames(C3[C3[,'Example_Data']==T&C3[,'after heterozygous Filter']==F&C3[,'before Filter']==F,])
+hit=rownames(C3[C3[,'Example_Data']==T&C3[,'after heterozygous Filter']==T&C3[,'before Filter']==T,])
+
+
+
+```
+```{r ,fig.show='hold', include=F,echo=FALSE,message=FALSE,warning=FALSE,cache=F}
+
+
+# OL3[OL3$V0%in%miss,]
+# OL3[OL3$V0%in%hit,]
+# criteria="KD_mean_coverage"
+# boxplot(OL3[OL3$V0%in%hit,criteria],OL3[OL3$V0%in%miss,criteria],names=c('hit','miss'),main=criteria)
+#
+# missplot=as.data.frame(OL3[OL3$V0%in%miss,criteria]);missplot$Catagroy='miss';colnames(missplot)[1]=criteria
+# hitplot=as.data.frame(OL3[OL3$V0%in%hit,criteria]);hitplot$Catagroy='hit';colnames(hitplot)[1]=criteria
+# p=rbind(missplot,hitplot)
+#
+# ggplot(p, aes(x=Catagroy, y=p[,1], fill=Catagroy)) +
+#     geom_boxplot() +
+#     scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+#     geom_jitter(color="black", size=0.4, alpha=0.9) +
+#     theme(
+#       legend.position="none",
+#       plot.title = element_text(size=11)
+#     ) +
+#     ggtitle("A boxplot with jitter") +
+#     xlab("")
+
+criteria=c('V0','DE','V4.1','V4.2','V5.1','V5.2','AO.1_dedup', 'DP.1_dedup','AO.2_dedup', 'DP.2_dedup')
+criteria=c("avgV4",'V0','DE','V4.1','V5.1','editing_ratio.1','V4.2','V5.2','editing_ratio.2','AO.2_dedup', 'DP.2_dedup','editing_ratio.2_dedup')
+# boxplot(OL3[OL3$V0%in%hit,criteria],OL3[OL3$V0%in%miss,criteria],names=c('hit','miss'),main=criteria)
+
+missplot=as.data.frame(OL3_1[OL3_1$V0%in%miss,criteria]);missplot$Catagroy='miss';colnames(missplot)[1]=criteria
+hitplot=as.data.frame(OL3_1[OL3_1$V0%in%hit,criteria]);hitplot$Catagroy='hit';colnames(hitplot)[1]=criteria
+p=rbind(missplot,hitplot)
+
+ggplot(p, aes(x=Catagroy, y=V4.1, fill=Catagroy)) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+    geom_jitter(color="black", size=0.7, alpha=0.9) +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11)
+    ) +
+annotate('text',x=2,y=20,label='Locations with counts above 2\nare not identified in custom\ncounts because editing ratio is < .1')  +
+  # ggtitle("Editing count") +
+    xlab("")+ylab("Editing count (Example Data)")
+
+
+```
+
+
+
+
+```{r ,fig.show='hold', include=F,echo=FALSE,message=FALSE,warning=FALSE,cache=F}
+
+a=OL3_1$V0
+a=OL3_1[OL3_1$DE==1,'V0']
+b=unique(c(OL3_1[OL3_1$AO.2_dedup_fltanosnp>0,"V0"]))
+  b=b[is.na(b)==F]
+c=unique(c(OL3_1[OL3_1$AO.2_dedup_fltanosnphet>0,"V0"]))
+  c=c[is.na(c)==F]
+
+OVLG_all=unique(c(a,b,c))
+a=OVLG_all%in%a
+b=OVLG_all%in%b
+c=OVLG_all%in%c
+C3=cbind(a,b,c)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_DE','AfterSNPselect','AfterHomo_Removal')
+vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c("orange", "blue", "green3"))
+
+```
+
+**Evaluate all positions in chr2**  
+We will now call variants on entire datasets (not just those identified in example)  
+   
+First check input and output for GIREMI.  
+GIREMI should give RNA editing information for every variant in VCF.  
+
+<br>  
+
+
+
+```{r include=F ,echo=F,warning=F,eval=T}
+
+OL3_1=OL3_1[,c("V0","V1","V2","V3","DE","filter",'V4.1','V5.1','editing_ratio.1',  colnames(OL3_1)[grep('.2_',colnames(OL3_1))]) ]
+```
+
+
+```{r include=F ,echo=F,warning=F,eval=T}
+
+
+ADAR_1_RZR_dedup_fltanosnphet_REall=read.delim(paste0("../RASER/041420/HepG2_ADAR_ENCLB012QRD.dedup_filter.snps.het_anoEnsm.mrksnpEns.res.res"), header=T, sep="\t",stringsAsFactors = F)
+ADAR_2_RZR_dedup_fltanosnphet_REall=read.delim(paste0("../RASER/041420/HepG2_ADAR_ENCLB918BSZ.dedup_filter.snps.het_anoEnsm.mrksnpEns.res.res"), header=T, sep="\t",stringsAsFactors = F)
+
+
+
+ADAR_1_RZR_dedup_fltanosnphet_REall$minor_count=ADAR_1_RZR_dedup_fltanosnphet_REall$tot_count-ADAR_1_RZR_dedup_fltanosnphet_REall$major_count
+ADAR_2_RZR_dedup_fltanosnphet_REall$minor_count=ADAR_2_RZR_dedup_fltanosnphet_REall$tot_count-ADAR_2_RZR_dedup_fltanosnphet_REall$major_count
+
+ a=ADAR_1_RZR_dedup_fltanosnphet_REall[(ADAR_1_RZR_dedup_fltanosnphet_REall$reference_base!=ADAR_1_RZR_dedup_fltanosnphet_REall$major_base),]
+    a$editing_ratio=a$major_count/a$tot_count
+    b=ADAR_1_RZR_dedup_fltanosnphet_REall[(ADAR_1_RZR_dedup_fltanosnphet_REall$reference_base==ADAR_1_RZR_dedup_fltanosnphet_REall$major_base),]
+    b$editing_ratio=b$minor_count/b$tot_count
+ADAR_1_RZR_dedup_fltanosnphet_REall=rbind(a,b)
+
+    a=ADAR_2_RZR_dedup_fltanosnphet_REall[(ADAR_2_RZR_dedup_fltanosnphet_REall$reference_base!=ADAR_2_RZR_dedup_fltanosnphet_REall$major_base),]
+    a$editing_ratio=a$major_count/a$tot_count
+    b=ADAR_2_RZR_dedup_fltanosnphet_REall[(ADAR_2_RZR_dedup_fltanosnphet_REall$reference_base==ADAR_2_RZR_dedup_fltanosnphet_REall$major_base),]
+    b$editing_ratio=b$minor_count/b$tot_count
+ADAR_2_RZR_dedup_fltanosnphet_REall=rbind(a,b)
+
+
+ADAR_1_RZR_dedup_fltanosnphet_REall$V0=paste0(ADAR_1_RZR_dedup_fltanosnphet_REall$chr,":",ADAR_1_RZR_dedup_fltanosnphet_REall$coordinate)
+ADAR_2_RZR_dedup_fltanosnphet_REall$V0=paste0(ADAR_2_RZR_dedup_fltanosnphet_REall$chr,":",ADAR_2_RZR_dedup_fltanosnphet_REall$coordinate)
+
+ADAR_1_RZR_dedup_fltanosnphet_REallx=ADAR_1_RZR_dedup_fltanosnphet_REall
+ADAR_2_RZR_dedup_fltanosnphet_REallx=ADAR_2_RZR_dedup_fltanosnphet_REall
+
+
+
+#########################################################
+# ADAR_1_RZR_dedup_fltanosnphet_REall=ADAR_1_RZR_dedup_fltanosnphet_REall[ADAR_1_RZR_dedup_fltanosnphet_REall$ifRNAE>0,]
+ADAR_1_RZR_dedup_fltanosnphet_REall=ADAR_1_RZR_dedup_fltanosnphet_REall[ADAR_1_RZR_dedup_fltanosnphet_REall$chr=='chr2',]
+ADAR_1_RZR_dedup_fltanosnphet_REall=ADAR_1_RZR_dedup_fltanosnphet_REall[ADAR_1_RZR_dedup_fltanosnphet_REall$tot_count>5,]
+ADAR_1_RZR_dedup_fltanosnphet_REall=ADAR_1_RZR_dedup_fltanosnphet_REall[ADAR_1_RZR_dedup_fltanosnphet_REall$RNAE_t%in%'AG',]
+
+# ADAR_1_RZR_dedup_fltanosnphet_REall=
+#   rbind(
+#     ADAR_1_RZR_dedup_fltanosnphet_REall[(ADAR_1_RZR_dedup_fltanosnphet_REall$reference_base!=ADAR_1_RZR_dedup_fltanosnphet_REall$major_base)&ADAR_1_RZR_dedup_fltanosnphet_REall$major_count>2,],
+#     ADAR_1_RZR_dedup_fltanosnphet_REall[(ADAR_1_RZR_dedup_fltanosnphet_REall$reference_base==ADAR_1_RZR_dedup_fltanosnphet_REall$major_base)&ADAR_1_RZR_dedup_fltanosnphet_REall$minor_count>2,])
+
+ADAR_1_RZR_dedup_fltanosnphet_REall=ADAR_1_RZR_dedup_fltanosnphet_REall[ADAR_1_RZR_dedup_fltanosnphet_REall$editing_ratio>.1,]
+
+######
+
+# ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$ifRNAE>0,]
+ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$chr=='chr2',]
+ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$tot_count>5,]
+ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$RNAE_t%in%'AG',]
+
+ADAR_2_RZR_dedup_fltanosnphet_REall=
+  rbind(
+    ADAR_2_RZR_dedup_fltanosnphet_REall[(ADAR_2_RZR_dedup_fltanosnphet_REall$reference_base!=ADAR_2_RZR_dedup_fltanosnphet_REall$major_base)&ADAR_2_RZR_dedup_fltanosnphet_REall$major_count>2,],
+    ADAR_2_RZR_dedup_fltanosnphet_REall[(ADAR_2_RZR_dedup_fltanosnphet_REall$reference_base==ADAR_2_RZR_dedup_fltanosnphet_REall$major_base)&ADAR_2_RZR_dedup_fltanosnphet_REall$minor_count>2,])
+
+ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$editing_ratio>.1,]
+
+ADAR_2_RZR_dedup_fltanosnphet_REall$Editing_Count=rowSums(ADAR_2_RZR_dedup_fltanosnphet_REall[,c('G','C')])
+
+
+ADAR_2_RZR_dedup_fltanosnphet_REall.GR <- GRanges(seqnames = as.character(ADAR_2_RZR_dedup_fltanosnphet_REall$chr), ranges=IRanges(start = as.numeric(ADAR_2_RZR_dedup_fltanosnphet_REall$coordinate), end = as.numeric(ADAR_2_RZR_dedup_fltanosnphet_REall$coordinate)),strand = as.character(ADAR_2_RZR_dedup_fltanosnphet_REall$strand),V0=ADAR_2_RZR_dedup_fltanosnphet_REall$V0,gene=ADAR_2_RZR_dedup_fltanosnphet_REall$gene,ifRNAE=ADAR_2_RZR_dedup_fltanosnphet_REall$ifRNAE )
+```
+
+
+```{r include=F ,echo=F,warning=F,eval=F}
+ADAR_1_RZR_dedup_fltanosnphet_vcfall <- read.vcfR( "../RASER/041420/HepG2_ADAR_ENCLB012QRD.dedup_filter.snps.het_anoEnsm.vcf", verbose = FALSE )
+ADAR_2_RZR_dedup_fltanosnphet_vcfall <- read.vcfR( "../RASER/041420/HepG2_ADAR_ENCLB918BSZ.dedup_filter.snps.het_anoEnsm.vcf", verbose = FALSE )
+
+ADAR_1_RZR_dedup_fltanosnphet_vcfall@meta[grepl("command",(ADAR_1_RZR_dedup_fltanosnphet_vcfall@meta))]
+
+
+  ADAR_1_RZR_dedup_fltanosnphet_vcfall <- cbind(as.data.frame(getFIX(ADAR_1_RZR_dedup_fltanosnphet_vcfall)), INFO2df(ADAR_1_RZR_dedup_fltanosnphet_vcfall))
+  ADAR_2_RZR_dedup_fltanosnphet_vcfall <- cbind(as.data.frame(getFIX(ADAR_2_RZR_dedup_fltanosnphet_vcfall)), INFO2df(ADAR_2_RZR_dedup_fltanosnphet_vcfall))
+
+ADAR_1_RZR_dedup_fltanosnphet_vcfallOG = ADAR_1_RZR_dedup_fltanosnphet_vcfall
+ADAR_2_RZR_dedup_fltanosnphet_vcfallOG = ADAR_2_RZR_dedup_fltanosnphet_vcfall
+
+write.table(ADAR_1_RZR_dedup_fltanosnphet_vcfall,file=("../RASER/041420/HepG2_ADAR_ENCLB012QRD.dedup_filter.snps.het_anoEnsm.vcf.txt"), sep = "\t", row.names = FALSE, col.names = T, append = F, quote= FALSE)
+  write.table(ADAR_2_RZR_dedup_fltanosnphet_vcfall,file=("../RASER/041420/HepG2_ADAR_ENCLB918BSZ.dedup_filter.snps.het_anoEnsm.vcf.txt"), sep = "\t", row.names = FALSE, col.names = T, append = F, quote= FALSE)
+
+```
+```{r include=F ,echo=F,warning=F,eval=T}
+
+
+  ADAR_1_RZR_dedup_fltanosnphet_vcfall=read.delim(paste0("../RASER/041420/HepG2_ADAR_ENCLB012QRD.dedup_filter.snps.het_anoEnsm.vcf.txt"), header=T, sep="\t",stringsAsFactors = F)
+ADAR_2_RZR_dedup_fltanosnphet_vcfall=read.delim(paste0("../RASER/041420/HepG2_ADAR_ENCLB918BSZ.dedup_filter.snps.het_anoEnsm.vcf.txt"), header=T, sep="\t",stringsAsFactors = F)
+
+ADAR_1_RZR_dedup_fltanosnphet_vcfall$V0=paste0(ADAR_1_RZR_dedup_fltanosnphet_vcfall$CHROM,':',ADAR_1_RZR_dedup_fltanosnphet_vcfall$POS)
+ADAR_2_RZR_dedup_fltanosnphet_vcfall$V0=paste0(ADAR_2_RZR_dedup_fltanosnphet_vcfall$CHROM,':',ADAR_2_RZR_dedup_fltanosnphet_vcfall$POS)
+
+
+ADAR_1_RZR_dedup_fltanosnphet_vcfallOG = ADAR_1_RZR_dedup_fltanosnphet_vcfall
+ADAR_2_RZR_dedup_fltanosnphet_vcfallOG = ADAR_2_RZR_dedup_fltanosnphet_vcfall
+
+##################
+
+
+
+ADAR_1_RZR_dedup_fltanosnphet_vcfall$AO=as.numeric(ADAR_1_RZR_dedup_fltanosnphet_vcfall$AO)
+ADAR_1_RZR_dedup_fltanosnphet_vcfall$DP=as.numeric(ADAR_1_RZR_dedup_fltanosnphet_vcfall$DP)
+ADAR_2_RZR_dedup_fltanosnphet_vcfall$AO=as.numeric(ADAR_2_RZR_dedup_fltanosnphet_vcfall$AO)
+ADAR_2_RZR_dedup_fltanosnphet_vcfall$DP=as.numeric(ADAR_2_RZR_dedup_fltanosnphet_vcfall$DP)
+
+
+#####Chrom and SNP filter
+ ADAR_1_RZR_dedup_fltanosnphet_vcfall=ADAR_1_RZR_dedup_fltanosnphet_vcfall[ADAR_1_RZR_dedup_fltanosnphet_vcfall$CHROM=="chr2",]
+ADAR_2_RZR_dedup_fltanosnphet_vcfall=ADAR_2_RZR_dedup_fltanosnphet_vcfall[ADAR_2_RZR_dedup_fltanosnphet_vcfall$CHROM=="chr2",]
+ADAR_1_RZR_dedup_fltanosnphet_vcfall=ADAR_1_RZR_dedup_fltanosnphet_vcfall[grep("snp",ADAR_1_RZR_dedup_fltanosnphet_vcfall$TYPE),]
+ADAR_2_RZR_dedup_fltanosnphet_vcfall=ADAR_2_RZR_dedup_fltanosnphet_vcfall[grep("snp",ADAR_2_RZR_dedup_fltanosnphet_vcfall$TYPE),]
+
+### currently did not include freq filter so adding it in now will have some NA vaules for positions with two differnt SNP (AO = 1,2)
+ADAR_1_RZR_dedup_fltanosnphet_vcfall$editing_ratio=ADAR_1_RZR_dedup_fltanosnphet_vcfall$AO/ADAR_1_RZR_dedup_fltanosnphet_vcfall$DP
+ADAR_2_RZR_dedup_fltanosnphet_vcfall$editing_ratio=ADAR_2_RZR_dedup_fltanosnphet_vcfall$AO/ADAR_2_RZR_dedup_fltanosnphet_vcfall$DP
+
+ADAR_1_RZR_dedup_fltanosnphet_vcfallbyER=unique(ADAR_1_RZR_dedup_fltanosnphet_vcfall[(ADAR_1_RZR_dedup_fltanosnphet_vcfall$editing_ratio<=.1|is.na(ADAR_1_RZR_dedup_fltanosnphet_vcfall$editing_ratio)),'V0'])
+ADAR_2_RZR_dedup_fltanosnphet_vcfallbyER=unique(ADAR_2_RZR_dedup_fltanosnphet_vcfall[(ADAR_2_RZR_dedup_fltanosnphet_vcfall$editing_ratio<=.1|is.na(ADAR_2_RZR_dedup_fltanosnphet_vcfall$editing_ratio)),'V0'])
+
+ADAR_1_RZR_dedup_fltanosnphet_vcfall=ADAR_1_RZR_dedup_fltanosnphet_vcfall[((ADAR_1_RZR_dedup_fltanosnphet_vcfall$editing_ratio>.1)),]
+ADAR_1_RZR_dedup_fltanosnphet_vcfall=ADAR_1_RZR_dedup_fltanosnphet_vcfall[is.na(ADAR_1_RZR_dedup_fltanosnphet_vcfall$V0)==F,]
+ADAR_2_RZR_dedup_fltanosnphet_vcfall=ADAR_2_RZR_dedup_fltanosnphet_vcfall[((ADAR_2_RZR_dedup_fltanosnphet_vcfall$editing_ratio>.1)),]
+ADAR_2_RZR_dedup_fltanosnphet_vcfall=ADAR_2_RZR_dedup_fltanosnphet_vcfall[is.na(ADAR_2_RZR_dedup_fltanosnphet_vcfall$V0)==F,]
+
+#################
+### only select AtoG SNP
+ADAR_1_RZR_dedup_fltanosnphet_vcfall=ADAR_1_RZR_dedup_fltanosnphet_vcfall[grepl('A',ADAR_1_RZR_dedup_fltanosnphet_vcfall$REF)&grepl('G',ADAR_1_RZR_dedup_fltanosnphet_vcfall$ALT)|grepl('T',ADAR_1_RZR_dedup_fltanosnphet_vcfall$REF)&grepl('C',ADAR_1_RZR_dedup_fltanosnphet_vcfall$ALT),]
+ADAR_2_RZR_dedup_fltanosnphet_vcfall=ADAR_2_RZR_dedup_fltanosnphet_vcfall[grepl('A',ADAR_2_RZR_dedup_fltanosnphet_vcfall$REF)&grepl('G',ADAR_2_RZR_dedup_fltanosnphet_vcfall$ALT)|grepl('T',ADAR_2_RZR_dedup_fltanosnphet_vcfall$REF)&grepl('C',ADAR_2_RZR_dedup_fltanosnphet_vcfall$ALT),]
+#
+  ADAR_1_RZR_dedup_fltanosnphet_vcfall <- ADAR_1_RZR_dedup_fltanosnphet_vcfall[(duplicated(ADAR_1_RZR_dedup_fltanosnphet_vcfall)==F),]
+  ADAR_2_RZR_dedup_fltanosnphet_vcfall <- ADAR_2_RZR_dedup_fltanosnphet_vcfall[(duplicated(ADAR_2_RZR_dedup_fltanosnphet_vcfall)==F),]
+
+  ADAR_1_RZR_dedup_fltanosnphet_vcfall$V0=paste0(ADAR_1_RZR_dedup_fltanosnphet_vcfall$CHROM,':',ADAR_1_RZR_dedup_fltanosnphet_vcfall$POS)
+  ADAR_2_RZR_dedup_fltanosnphet_vcfall$V0=paste0(ADAR_2_RZR_dedup_fltanosnphet_vcfall$CHROM,':',ADAR_2_RZR_dedup_fltanosnphet_vcfall$POS)
+```
+
+
+
+
+
+
+```{r include=T ,echo=F,warning=F,eval=T}
+remove(a,b,c,aa,bb,cc,OVLG_all,C3)
+#########
+a=unique(OL3_1[,'V0'])
+  a=a[is.na(a)==F]
+# b=unique(c(OL3_1[OL3_1$DP.2_dedup_fltanosnphet>0,"V0"]))
+b=unique((ADAR_2_RZR_dedup_fltanosnphet_vcfallOG[ADAR_2_RZR_dedup_fltanosnphet_vcfallOG$DP>0,'V0']))
+  b=b[is.na(b)==F]
+c=unique((ADAR_2_RZR_dedup_fltanosnphet_REallx[ADAR_2_RZR_dedup_fltanosnphet_REallx$tot_count>0,'V0']))
+  c=c[is.na(c)==F]
+
+OVLG_all=unique(c(a,b,c))
+aa=OVLG_all%in%a
+bb=OVLG_all%in%b
+cc=OVLG_all%in%c
+
+C3=cbind(aa,bb,cc)
+
+# C3[aa==T&bb==F&cc==F,][1:2,2]=T
+# C3[aa==T&bb==F&cc==F,][1,2]=T
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','VCF','GIREMI')
+{vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c("red", "blue",'green4',"orange"),main='Do the input and GIREMI output match')
+text(0.1,2.9,'the 3 missing locations occure beacuse GIREMI intermidiate step \nidentifies the mojor snp base as N and removes that location\n    (see GIREMI.R Code)',cex=.7)
+# text(2,-2.5,'7940 sites removed by major\nbase identified as N',cex=.7)
+}
+
+
+GIREMIhit=rownames(C3[C3[,'Example_Data']==T&C3[,'VCF']==F&C3[,'GIREMI']==T,])
+vcfhit=rownames(C3[C3[,'Example_Data']==T&C3[,'VCF']==T&C3[,'GIREMI']==F,])
+vcfonly=rownames(C3[C3[,'Example_Data']==F&C3[,'VCF']==T&C3[,'GIREMI']==F,])
+allhit=rownames(C3[C3[,'Example_Data']==T&C3[,'VCF']==T&C3[,'GIREMI']==T,])
+
+alal=OL3_1[OL3_1$V0%in%allhit,]
+aaa=OL3_1[OL3_1$V0%in%GIREMIhit,]
+aaaX=ADAR_2_RZR_dedup_fltanosnphet_REallx[ADAR_2_RZR_dedup_fltanosnphet_REallx$V0%in%GIREMIhit,]
+bbb=OL3_1[OL3_1$V0%in%vcfhit,]
+bbbx=ADAR_2_RZR_dedup_fltanosnphet_vcfallOG[ADAR_2_RZR_dedup_fltanosnphet_vcfallOG$V0%in%vcfhit,c('V0',"CHROM","POS","ID","REF","ALT","DP",'AO')];bbbx$editing_ratio=as.numeric(bbbx$AO)/as.numeric(bbbx$DP)
+
+ccc=ADAR_2_RZR_dedup_fltanosnphet_vcfallOG[ADAR_2_RZR_dedup_fltanosnphet_vcfallOG$V0%in%vcfonly,c('V0',"CHROM","POS","ID","REF","ALT","DP",'AO')];ccc$editing_ratio=as.numeric(ccc$AO)/as.numeric(ccc$DP)
+cccx=ADAR_2_RZR_dedup_fltanosnphet_REallx[ADAR_2_RZR_dedup_fltanosnphet_REallx$V0%in%vcfonly,]
+
+# colnames(ccc)
+
+ 
+```
+
+Sites removed by GIREMI:   
+chr2:74375267   
+chr2:91811384   
+chr2:91811564   
+
+
+```{r include=F ,echo=F,warning=F,eval=F}
+
+View(ADAR_2_RZR_dedup_fltanosnphet_REallx)
+View(ADAR_2_RZR_dedup_fltanosnphet_vcfallOG)
+```
+
+### Check “dbSNP” filter: removes RDDs annotated as SNPs (dbSNP 135)  
+<br>  
+
+```{r include=T ,echo=F,warning=F,eval=T}
+# ADAR_1_RZR_dedup_fltanosnphet_SNP=read.delim(paste0("../RASER/041420/HepG2_ADAR_ENCLB918BSZ.dedup_filter.snps.het_anoEnsm.mrksnpEns.txt"), header=T, sep="\t",stringsAsFactors = F)
+# 
+# ADAR_1_RZR_dedup_fltanosnphet_SNP
+
+remove(a,b,c,aa,bb,cc,OVLG_all,C3)
+#########
+a=unique(OL3_1[,'V0'])
+  a=a[is.na(a)==F]
+# b=unique(c(OL3_1[OL3_1$DP.2_dedup_fltanosnphet>0,"V0"]))
+b=unique((ADAR_2_RZR_dedup_fltanosnphet_REallx$V0))
+  b=b[is.na(b)==F]
+c=unique((ADAR_2_RZR_dedup_fltanosnphet_REallx[ADAR_2_RZR_dedup_fltanosnphet_REallx$ifSNP>0,'V0']))
+  c=c[is.na(c)==F]
+
+OVLG_all=unique(c(a,b,c))
+aa=OVLG_all%in%a
+bb=OVLG_all%in%b
+cc=OVLG_all%in%c
+
+C3=cbind(aa,bb,cc)
+
+# C3[aa==T&bb==F&cc==F,][1:2,2]=T
+# C3[aa==T&bb==F&cc==F,][1,2]=T
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','Annotated SNP','Not Annotated SNP')
+{vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c("red", "blue",'green4',"orange"))
+text(2,-2.5,'No Locations missed by\nSNP database',cex=.7)
+# text(2,-2.5,'7940 sites removed by major\nbase identified as N',cex=.7)
+}
+```
+
+
+```{r include=F ,echo=F,warning=F,eval=F}
+
+ADAR_2_RZR_dedup_fltanosnphet_mrksnpallxx=read.delim(paste0("../RASER/041420/HepG2_ADAR_ENCLB918BSZ.dedup_filter.snps.het_anoEnsm.mrksnpEns.txt"), header=F, sep="\t",stringsAsFactors = F)
+ADAR_2_RZR_dedup_fltanosnphet_mrksnpallxx$V0=paste0(ADAR_2_RZR_dedup_fltanosnphet_mrksnpallxx$V1,":",ADAR_2_RZR_dedup_fltanosnphet_mrksnpallxx$V3)
+
+remove(a,b,c,aa,bb,cc,OVLG_all,C3)
+#########
+a=unique(OL3_1[,'V0'])
+# b=unique(c(OL3_1[OL3_1$DP.2_dedup_fltanosnphet>0,"V0"]))
+b=unique((ADAR_2_RZR_dedup_fltanosnphet_vcfallOG[ADAR_2_RZR_dedup_fltanosnphet_vcfallOG$DP>0,'V0']))
+  b=b[is.na(b)==F]
+c=unique((ADAR_2_RZR_dedup_fltanosnphet_mrksnpallxx[,'V0']))
+  c=c[is.na(c)==F]
+
+OVLG_all=unique(c(a,b,c))
+aa=OVLG_all%in%a
+bb=OVLG_all%in%b
+cc=OVLG_all%in%c
+C3=cbind(aa,bb,cc)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','VCF','mark SNP')
+vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c("red", "blue",'green4',"orange"),
+            main="No loss for Mark SNP input to GIREMI")
+
+
+```
+
+
+```{r include=F ,echo=F,warning=F,eval=F}
+
+ADAR_2_RZR_dedup_fltanosnphet_GIREMIallxx=read.delim(paste0("../RASER/041420/HepG2_ADAR_ENCLB918BSZ.dedup_filter.snps.het_anoEnsm.mrksnpEns.res"), header=T, sep="\t",stringsAsFactors = F)
+ADAR_2_RZR_dedup_fltanosnphet_GIREMIallxx$V0=paste0(ADAR_2_RZR_dedup_fltanosnphet_GIREMIallxx$chr,":",ADAR_2_RZR_dedup_fltanosnphet_GIREMIallxx$coor)
+
+remove(a,b,c,aa,bb,cc,OVLG_all,C3)
+#########
+a=unique(OL3_1[,'V0'])
+# b=unique(c(OL3_1[OL3_1$DP.2_dedup_fltanosnphet>0,"V0"]))
+b=unique((ADAR_2_RZR_dedup_fltanosnphet_vcfallOG[ADAR_2_RZR_dedup_fltanosnphet_vcfallOG$DP>0,'V0']))
+  b=b[is.na(b)==F]
+c=unique((ADAR_2_RZR_dedup_fltanosnphet_GIREMIallxx[,'V0']))
+  c=c[is.na(c)==F]
+
+OVLG_all=unique(c(a,b,c))
+aa=OVLG_all%in%a
+bb=OVLG_all%in%b
+cc=OVLG_all%in%c
+C3=cbind(aa,bb,cc)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','VCF','GIRMI out .res')
+vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c("red", "blue",'green4',"orange"),
+            main="No loss for first output from GIREMI (.res)")
+
+
+```
+
+```{r include=F ,echo=F,warning=F,eval=F}
+############################################################
+### this is GREMI.R code
+############################################################
+
+ss <- function(TP,TN,FP,FN,bet=1){
+	if (is.na(TP)) TP=0
+	if (is.na(TN)) TN=0
+	if (is.na(FP)) FP=0
+	if (is.na(FN)) FN=0
+	sen=TP/(TP+FN)
+	spe=TN/(TN+FP)
+	pre=TP/(TP+FP)
+	f = (1+bet^2)*pre*sen/(bet^2*pre+sen)
+	return(c(sen,spe,pre,f))
+}
+
+log_up <- function(x){
+	ids = which(x<=0)
+	x[ids] = 0.0000001
+	return(log10(x))
+}
+library(ggplot2)
+
+args = (commandArgs(trailingOnly = T))
+print (args)
+for (i in 1:length(args)){
+	eval(parse(text=args[[i]]))
+}
+
+finput='../RASER/041420/HepG2_ADAR_ENCLB918BSZ.dedup_filter.snps.het_anoEnsm.mrksnpEns.res'
+# dat <- read.table(file=finput,header=F,row.names=1,comment.char="")
+#dat <- read.table(file=finput,header=T,comment.char="")
+dat <- read.table(file=finput,header=T,sep = "\t")
+rownames(dat) = paste(dat[,"chr"],dat[,"coor"],dat[,"strand"],sep="|")
+dat = cbind(dat,0)
+colnames(dat) <- c("chr","coordinate","strand","ifSNP","gene","reference_base","upstream_1base","downstream_1base","major_base","major_count","tot_count","major_ratio","if_MI","MI","pvalue_MI","estimated_allelic_ratio","ifNEG","if_GLM","pvalue_GLM","RNAE_t","A","C","G","T","ifRNAE")
+ids = which(dat[,"major_base"]=="N")
+if (length(ids)>0) dat = dat[-ids,]
+dat[rownames(subset(dat,pvalue_MI>0 & pvalue_MI<=0.05 & ifSNP==0)),"ifRNAE"]= 1
+dat.pos <- subset(dat, pvalue_MI>0 & pvalue_MI <= 0.01 & ifSNP==0 & RNAE_t == "AG")
+
+
+if (nrow(dat.pos)==0){
+dat.pos <- subset(dat, pvalue_MI>0 & pvalue_MI <= 0.05 & ifSNP==0 & RNAE_t == "AG")
+}
+
+
+dat.neg <- subset(dat,ifNEG == 1)
+#dat.neg <- subset(dat,ifNEG == 1 & RNAE_t=="AG")
+dat.unknown = subset(dat,ifRNAE==0 & ifSNP ==0 & RNAE_t=="AG")
+
+# if (nrow(dat.pos)==0){
+#   dat.pos[1,] =dat.neg[1,]
+# }
+
+dat.pos <- cbind(dat.pos[,c("upstream_1base","downstream_1base")],abs(dat.pos[,"major_ratio"]-dat.pos[,"estimated_allelic_ratio"]),1)
+dat.neg <- cbind(dat.neg[,c("upstream_1base","downstream_1base")],abs(dat.neg[,"major_ratio"]-dat.neg[,"estimated_allelic_ratio"]),0)
+dat.unknown <- cbind(dat.unknown[,c("upstream_1base","downstream_1base")],abs(dat.unknown[,"major_ratio"]-dat.unknown[,"estimated_allelic_ratio"]))
+
+colnames(dat.pos) = colnames(dat.neg) = c("upstream_1base","downstream_1base","dif","type")
+colnames(dat.unknown) = c("upstream_1base","downstream_1base","dif")
+
+
+dat.train = rbind(dat.pos[1:round(nrow(dat.pos)/2),],dat.neg[1:round(nrow(dat.neg)/2),])
+dat.test = rbind(dat.pos[(round(nrow(dat.pos)/2)+1):nrow(dat.pos),],dat.neg[(round(nrow(dat.neg)/2)+1):nrow(dat.neg),])
+
+glm.model <- glm(type ~ .,family=binomial,data = dat.train)
+pre.test <- predict(glm.model, dat.test)
+
+cuts=seq(min(pre.test)-0.05,max(pre.test),0.1)
+cuts.f = matrix(0,nrow=0,ncol=5,dimnames=list(c(),c("cutoff","sen","spe","pre","f")))
+for (i in cuts){
+	sub.pos = which(pre.test >= i)
+	sub.neg = which(pre.test < i)
+	tb.pos = table(dat.test[names(sub.pos),"type"])
+	tb.neg = table(dat.test[names(sub.neg),"type"])
+	TP = as.numeric(tb.pos["1"])
+	FP = as.numeric(tb.pos["0"])
+	TN = as.numeric(tb.neg["0"])
+	FN = as.numeric(tb.neg["1"])
+	f=ss(TP,TN,FP,FN,bet=0.3)
+	cuts.f=rbind(cuts.f,c(i,f))
+}
+cut.off = cuts.f[which.max(cuts.f[,"f"]),"cutoff"]
+
+pre.unknown <- predict(glm.model, dat.unknown)
+#dat[names(which(pre.unknown>=cut.off)),"ifRNAE_glm"]= 1
+dat[names(which(pre.unknown>=cut.off)),"ifRNAE"]= 2
+dat = dat[,-c(13,18,19)]
+write.table(file=fout,dat,quote=F,sep="\t")
+
+```
+
+
+```{r include=F ,echo=F,warning=F,eval=T}
+
+
+remove(a,b,c,aa,bb,cc,OVLG_all,C3)
+#########
+a=unique(OL3_1[,'V0'])
+# b=unique(c(OL3_1[OL3_1$DP.2_dedup_fltanosnphet>0,"V0"]))
+b=unique((ADAR_2_RZR_dedup_fltanosnphet_REallx[,'V0']))
+  b=b[is.na(b)==F]
+c=unique((ADAR_2_RZR_dedup_fltanosnphet_REall[,'V0']))
+  c=c[is.na(c)==F]
+
+OVLG_all=unique(c(a,b,c))
+aa=OVLG_all%in%a
+bb=OVLG_all%in%b
+cc=OVLG_all%in%c
+C3=cbind(aa,bb,cc)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','Full GIREMI table','GIREMI- after Expression Filters')
+{vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c("red", "blue",'green4',"orange"),
+            main="No loss for first output from GIREMI (.res)")
+# text(0.1,2.9,'the 8 Filtered Locations all removed for low editing ratio (<10%)',cex=.7)
+#text(2,-2.5,'7940 sites removed by major\nbase identified as N',cex=.7)
+}
+
+
+GIREMIhit=rownames(C3[C3[,'Example_Data']==T&C3[,'Full GIREMI table']==T&C3[,'GIREMI- after Expression Filters']==F,])
+filterhit=rownames(C3[C3[,'Example_Data']==T&C3[,'Full GIREMI table']==F&C3[,'GIREMI- after Expression Filters']==T,])
+allhit=rownames(C3[C3[,'Example_Data']==T&C3[,'Full GIREMI table']==T&C3[,'GIREMI- after Expression Filters']==T,])
+
+
+alal=OL3_1[OL3_1$V0%in%allhit,]
+
+aaa=OL3_1[OL3_1$V0%in%GIREMIhit,]
+aaaX=ADAR_2_RZR_dedup_fltanosnphet_REallx[ADAR_2_RZR_dedup_fltanosnphet_REallx$V0%in%GIREMIhit,]
+### 8 removed for low editing Ratio
+
+
+bbb=OL3_1[OL3_1$V0%in%filterhit,]
+bbbx=ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$V0%in%filterhit,];
+bbbx$editing_ratio=as.numeric(bbbx$AO)/as.numeric(bbbx$DP)
+
+
+```
+
+
+```{r include=F ,echo=F,warning=F,eval=T}
+
+ADAR_2_RZR_dedup_fltanosnphet_REall.GR <- GRanges(seqnames = as.character(ADAR_2_RZR_dedup_fltanosnphet_REall$chr), ranges=IRanges(start = as.numeric(ADAR_2_RZR_dedup_fltanosnphet_REall$coordinate), end = as.numeric(ADAR_2_RZR_dedup_fltanosnphet_REall$coordinate)),strand = ADAR_2_RZR_dedup_fltanosnphet_REall$strand,V0=ADAR_2_RZR_dedup_fltanosnphet_REall$V0 )
+```
+
+### “splice site” filter: removes intronic RDDs within 4 bp of splice junctions  
+
+<br>
+```{r junc, include=F ,echo=F,warning=F,eval=T}
+
+junc_GRCh37=read.delim(paste0("../GIREMI_Compair_Data/junc_GRCh37.bed"), header=F, sep="\t",stringsAsFactors = F)
+
+```
+
+```{r include=T ,echo=F,warning=F,eval=T}
+
+junc_GRCh37.GR <- GRanges(seqnames = as.character(junc_GRCh37$V1), ranges=IRanges(start = as.numeric(junc_GRCh37$V2), end = as.numeric(junc_GRCh37$V3)),strand = junc_GRCh37$V6 )
+
+        gr =ADAR_2_RZR_dedup_fltanosnphet_REall.GR;
+        gr2=junc_GRCh37.GR
+        xo=as.data.frame(GenomicRanges::findOverlaps(gr,gr2,type = "any",ignore.strand=T))
+
+        qh=as.data.frame(gr[xo$queryHits],row.names = NULL)
+        sh=as.data.frame(gr2[xo$subjectHits],row.names = NULL)
+
+ Junc=unique(qh$V0)
+
+#############
+a=unique(OL3_1[,'V0'])
+b=unique(ADAR_2_RZR_dedup_fltanosnphet_REall$V0)
+  b=b[is.na(b)==F]
+c=unique(qh$V0)
+  c=c[is.na(c)==F]
+
+OVLG_all=unique(c(a,b,c))
+aa=OVLG_all%in%a
+bb=OVLG_all%in%b
+cc=OVLG_all%in%c
+C3=cbind(aa,bb,cc)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','GIREMI sites','Junc')
+{vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c( "red","blue","green4","orange",'green'))
+text(2,-2.5,'Remove All sites that Overlap\n with Splice junctions',cex=.7)
+}
+
+```
+
+Sites removed by splice site filter:   
+chr2:118853993  
+chr2:44071743   
+chr2:198361861    
+
+```{r include=F ,echo=F,warning=F,eval=T}
+
+#############
+
+ADAR_2_RZR_dedup_fltanosnphet_REall$Junc=0
+ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$V0%in%Junc,'Junc']=1
+ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$Junc==0,]
+ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REall[duplicated(ADAR_2_RZR_dedup_fltanosnphet_REall)==F,]
+
+ADAR_2_RZR_dedup_fltanosnphet_REall.GR <- GRanges(seqnames = as.character(ADAR_2_RZR_dedup_fltanosnphet_REall$chr), ranges=IRanges(start = as.numeric(ADAR_2_RZR_dedup_fltanosnphet_REall$coordinate), end = as.numeric(ADAR_2_RZR_dedup_fltanosnphet_REall$coordinate)),strand = ADAR_2_RZR_dedup_fltanosnphet_REall$strand,V0=ADAR_2_RZR_dedup_fltanosnphet_REall$V0, ifRNAE=ADAR_2_RZR_dedup_fltanosnphet_REall$ifRNAE )
+
+ADAR_2_RZR_dedup_fltanosnphet_REallogJX=ADAR_2_RZR_dedup_fltanosnphet_REall
+```
+
+
+
+### “homopolymer” filter: removes sites in homopolyer runs of ≥5 bp  
+
+
+```{r homo, include=F ,echo=F,warning=F,eval=T}
+
+###### Script to find homopolymer (poly-A/T/C/G) stretches in a given BSgenome with of user-defined minimum length.
+###### Written by Alexander Toenges (a.toenges@uni-muenster.de)
+# https://github.com/ATpoint/Rscripts/commit/3f55a7740179a4c72df513f4668c7caf2b5af131
+###################################################################################################################
+###################################################################################################################
+require(BSgenome.Hsapiens.UCSC.hg19)
+require(Biostrings)
+require(GenomicRanges)
+## Avoid floating point numbers for larger genomic coordinates:
+options(scipen=999)
+###################################################################################################################
+###################################################################################################################
+
+###################################################################################################################
+###################################################################################################################
+## Select your genome:
+hg19 <- BSgenome.Hsapiens.UCSC.hg19
+
+
+## Helper function for pattern matching:
+## Function searches a given chromosome (chr) of the BSgenome (tmp.genome) for pattern matches (given.seq)
+## Example: seq.check("AAAAAA", "chr1", BSgenome.Hsapiens.UCSC.hg19)
+seq.check <- function(given.seq, chr, tmp.genome){
+
+  ## Subset BSgenome to chromosome of interest:
+  current.chr <- tmp.genome[[which(tmp.genome@seqinfo@seqnames == chr)]]
+
+  ## Get all (also redundant) coordinates of the exact pattern match:
+  tmp.match <- matchPattern(given.seq, getSeq(tmp.genome, chr))
+
+  ## Transform to non-redundant granges:
+  return( GenomicRanges::reduce( GRanges(seqnames = chr, ranges = ranges(tmp.match))) )
+
+}
+
+## Function that uses seq.check() to output a granges with coordinates of all defined homopolymers in the genome:
+find.Homopolymers <- function(Nucleotide, NLength, Query.Genome){
+  return(
+    do.call("c", mclapply(paste("chr", c(seq(1,22), "X", "Y"), sep=""), function(x)
+      seq.check(
+        paste(replicate(NLength, Nucleotide), collapse = ""), x, Query.Genome), mc.cores=8)
+    )
+  )
+}
+
+###################################################################################################################
+###################################################################################################################
+
+## Here an example for all homopolymers of length 6 or larger:
+Homopolymer6_hg19.gr  <- do.call("c", list(find.Homopolymers("A", 6, BSgenome.Hsapiens.UCSC.hg19),
+                                           find.Homopolymers("T", 6, BSgenome.Hsapiens.UCSC.hg19),
+                                           find.Homopolymers("C", 6, BSgenome.Hsapiens.UCSC.hg19),
+                                           find.Homopolymers("G", 6, BSgenome.Hsapiens.UCSC.hg19)
+                                          )
+                                 )
+
+# Write 1-based granges to 0-based BED file on disk:
+# write.table(
+#   data.frame(
+#     seqnames(homoPolymerHexa.gr),
+#     start(homoPolymerHexa.gr)-1,
+#     end(homoPolymerHexa.gr)
+#   ), quote = F, col.names = F, row.names = F, sep="\t", file="Homopolymers_6AndMore_hg19.bed")
+
+```
+
+  
+
+```{r include=T ,echo=F,warning=F,eval=T}
+# ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REallogJX
+
+
+        gr =ADAR_2_RZR_dedup_fltanosnphet_REall.GR;
+        gr2=Homopolymer6_hg19.gr
+        xo=as.data.frame(GenomicRanges::findOverlaps(gr,gr2,type = "any",ignore.strand=T))
+
+        qh=as.data.frame(gr[xo$queryHits],row.names = NULL)
+        sh=as.data.frame(gr2[xo$subjectHits],row.names = NULL)
+# View(OL_1[OL_1$V2%in%qh$end,])
+        qhsh=cbind(qh,sh)
+
+        Homopoly=unique(qh$V0)
+#############
+a=unique(OL3_1[,'V0'])
+b=unique(ADAR_2_RZR_dedup_fltanosnphet_REall$V0)
+  b=b[is.na(b)==F]
+c=unique(qh$V0)
+  c=c[is.na(c)==F]
+
+OVLG_all=unique(c(a,b,c))
+aa=OVLG_all%in%a
+bb=OVLG_all%in%b
+cc=OVLG_all%in%c
+C3=cbind(aa,bb,cc)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','GIREMI sites','Homopolymer')
+{vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c( "red","blue","green4","orange",'green'))
+text(2,-2.5,'Remove All sites that Overlap\n with Homopolymer Regions',cex=.7)
+}
+
+GIREMIhit=rownames(C3[C3[,'Example_Data']==T&C3[,'GIREMI sites']==T&C3[,'Homopolymer']==F,])
+GIREMImiss=rownames(C3[C3[,'Example_Data']==F&C3[,'GIREMI sites']==T&C3[,'Homopolymer']==F,])
+filterhit=rownames(C3[C3[,'Example_Data']==T&C3[,'GIREMI sites']==F&C3[,'Homopolymer']==T,])
+filtermiss=rownames(C3[C3[,'Example_Data']==F&C3[,'GIREMI sites']==T&C3[,'Homopolymer']==T,])
+allhit=rownames(C3[C3[,'Example_Data']==T&C3[,'GIREMI sites']==T&C3[,'Homopolymer']==T,])
+
+
+alal=OL3_1[OL3_1$V0%in%allhit,]
+alalqh=qh[qh$V0%in%allhit,]
+alalqhsh=qhsh[qhsh$V0%in%allhit,]
+
+
+aaa=OL3_1[OL3_1$V0%in%GIREMIhit,]
+aaaX=ADAR_2_RZR_dedup_fltanosnphet_REallx[ADAR_2_RZR_dedup_fltanosnphet_REallx$V0%in%GIREMIhit,]
+
+
+bbb=OL3_1[OL3_1$V0%in%filterhit,]
+bbbx=qhsh[qhsh$V0%in%filtermiss,]
+bbbx=merge(bbbx,OL3_1[,c('V0','V4.1','V5.1','editing_ratio.1','DE','filter')],by='V0',all.x=T)
+
+
+###################
+
+ADAR_2_RZR_dedup_fltanosnphet_REall$Homopoly=0
+ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$V0%in%Homopoly,'Homopoly']=1
+ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$Homopoly==0,]
+ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REall[duplicated(ADAR_2_RZR_dedup_fltanosnphet_REall)==F,]
+
+ADAR_2_RZR_dedup_fltanosnphet_REall.GR <- GRanges(seqnames = as.character(ADAR_2_RZR_dedup_fltanosnphet_REall$chr), ranges=IRanges(start = as.numeric(ADAR_2_RZR_dedup_fltanosnphet_REall$coordinate), end = as.numeric(ADAR_2_RZR_dedup_fltanosnphet_REall$coordinate)),strand = ADAR_2_RZR_dedup_fltanosnphet_REall$strand,V0=ADAR_2_RZR_dedup_fltanosnphet_REall$V0, ifRNAE=ADAR_2_RZR_dedup_fltanosnphet_REall$ifRNAE )
+
+remove(a,b,c,aa,bb,cc,C3,qh,sh,xo)
+```
+
+Sites removed by Homopolymer filter:   
+chr2:71654450  
+chr2:7181486  
+
+
+### “simple repeat” filter: discards sites in simple repeats   
+  
+
+```{r repeats, include=T ,echo=F,warning=F,eval=T}
+
+## Filter out GIREMI sites in repeat regions
+
+repeats_GRCh37=read.delim(paste0("../GIREMI_Compair_Data/repeats_GRCh37.bed"), header=F, sep="\t",stringsAsFactors = F)
+  repeats_GRCh37og=repeats_GRCh37
+
+Smplrepeats_GRCh37=read.delim(paste0("../GIREMI_Compair_Data/simpleRepeat_GRCh37.txt"), header=T, sep="\t",stringsAsFactors = F)
+  Smplrepeats_GRCh37og=Smplrepeats_GRCh37
+
+rmsk_GRCm37=read.delim(paste0("../../mESC_clip/rbl.wolin.parclip/inst/extdata/rmsk_GRCm37.txt"), header=T, sep="\t",stringsAsFactors = F)
+  rmsk_GRCm37og=rmsk_GRCm37
+```
+
+**Use locations from RepeatMasker**  
+
+Do not remove locations in Alu regions  
+
+```{r include=T ,echo=F,warning=F,eval=T}
+# ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REallogJX
+rmsk_GRCm37=rmsk_GRCm37og
+
+alu=grep('Alu',rmsk_GRCm37$repFamily)
+rmsk_GRCm37=rmsk_GRCm37[-alu,]
+alu_GRCh37=rmsk_GRCm37[alu,]
+
+mir=grep('MIR',rmsk_GRCm37$repFamily)
+rmsk_GRCm37=rmsk_GRCm37[-mir,]
+mir_GRCh37=rmsk_GRCm37[mir,]
+
+# unique(rmsk_GRCm37$repClass)
+# unique(rmsk_GRCm37$repFamily)
+
+rmsk_GRCm37.GR <- GRanges(seqnames = as.character(rmsk_GRCm37$genoName), ranges=IRanges(start = as.numeric(rmsk_GRCm37$genoStart), end = as.numeric(rmsk_GRCm37$genoEnd)),strand = rmsk_GRCm37$strand, repName=rmsk_GRCm37$repName, repClass=rmsk_GRCm37$repClass, repFamily=rmsk_GRCm37$repFamily)
+
+        gr =ADAR_2_RZR_dedup_fltanosnphet_REall.GR;
+        gr2=rmsk_GRCm37.GR
+        xo=as.data.frame(GenomicRanges::findOverlaps(gr,gr2,type = "any",ignore.strand=T))
+
+        qh=as.data.frame(gr[xo$queryHits],row.names = NULL)
+        sh=as.data.frame(gr2[xo$subjectHits],row.names = NULL)
+# View(OL_1[OL_1$V2%in%qh$end,])
+        qhsh=cbind(qh,sh)
+
+        rmsk=unique(qh$V0)
+#############
+a=unique(OL3_1[,'V0'])
+b=unique(ADAR_2_RZR_dedup_fltanosnphet_REall$V0)
+  b=b[is.na(b)==F]
+c=unique(qh$V0)
+  c=c[is.na(c)==F]
+
+OVLG_all=unique(c(a,b,c))
+aa=OVLG_all%in%a
+bb=OVLG_all%in%b
+cc=OVLG_all%in%c
+C3=cbind(aa,bb,cc)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','GIREMI sites','RepeatMasker')
+{vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c( "red","blue","green4","orange",'green'))
+text(2,-2.5,'Remove All sites that Overlap\n with Repeat Regions',cex=.7)
+}
+
+GIREMIhit=rownames(C3[C3[,'Example_Data']==T&C3[,'GIREMI sites']==T&C3[,'RepeatMasker']==F,])
+GIREMImiss=rownames(C3[C3[,'Example_Data']==F&C3[,'GIREMI sites']==T&C3[,'RepeatMasker']==F,])
+filterhit=rownames(C3[C3[,'Example_Data']==T&C3[,'GIREMI sites']==F&C3[,'RepeatMasker']==T,])
+filtermiss=rownames(C3[C3[,'Example_Data']==F&C3[,'GIREMI sites']==T&C3[,'RepeatMasker']==T,])
+allhit=rownames(C3[C3[,'Example_Data']==T&C3[,'GIREMI sites']==T&C3[,'RepeatMasker']==T,])
+
+
+alal=OL3_1[OL3_1$V0%in%allhit,]
+alalqh=qh[qh$V0%in%allhit,]
+alalqhsh=qhsh[qhsh$V0%in%allhit,]
+
+
+aaa=OL3_1[OL3_1$V0%in%GIREMIhit,]
+aaaX=ADAR_2_RZR_dedup_fltanosnphet_REallx[ADAR_2_RZR_dedup_fltanosnphet_REallx$V0%in%GIREMIhit,]
+
+
+bbb=OL3_1[OL3_1$V0%in%filterhit,]
+bbbx=qhsh[qhsh$V0%in%filtermiss,]
+bbbx=merge(bbbx,OL3_1[,c('V0','V4.1','V5.1','editing_ratio.1','DE','filter')],by='V0',all.x=T)
+```
+
+```{r include=T ,echo=F,warning=F,eval=T}
+#############
+
+x=ADAR_2_RZR_dedup_fltanosnphet_REall
+
+x$filter=NA
+x[x$V0%in%(OVLG_all[C3[,'Example_Data']==T&C3[,'GIREMI sites']==F&C3[,'RepeatMasker']==F]),'filter']='Example_Data_only'
+x[x$V0%in%(OVLG_all[C3[,'Example_Data']==T&C3[,'GIREMI sites']==T&C3[,'RepeatMasker']==F]),'filter']='Example_Data + GIREMI_Sites'
+x[x$V0%in%(OVLG_all[C3[,'Example_Data']==F&C3[,'GIREMI sites']==T&C3[,'RepeatMasker']==F]),'filter']='GIREMI_Sites_only'
+x[x$V0%in%(OVLG_all[C3[,'Example_Data']==T&C3[,'GIREMI sites']==T&C3[,'RepeatMasker']==T]),'filter']='All'
+x[x$V0%in%(OVLG_all[C3[,'Example_Data']==F&C3[,'GIREMI sites']==T&C3[,'RepeatMasker']==T]),'filter']='GIREMI_sites + RepeatMasker'
+
+
+# colnames(ADAR_2_RZR_dedup_fltanosnphet_REallx)
+x=x[,c("chr","coordinate","strand","gene","ifSNP","ifRNAE","filter","reference_base","major_base","major_count","tot_count","Editing_Count","editing_ratio","MI","pvalue_MI","ifNEG","RNAE_t","A","C","G","T")]
+
+write.table(x,file=("./data/GIREMI_Output_RepeatMaskerFilter.txt"), sep = "\t", row.names = FALSE, col.names = T, append = F, quote= FALSE)
+
+```
+data_table:
+[GIREMI_Output_RepeatMaskerFilter.txt](./data/GIREMI_Output_RepeatMaskerFilter.txt)   
+<br>  
+
+```{r include=F ,echo=F,warning=F,eval=T}
+
+###################
+
+ADAR_2_RZR_dedup_fltanosnphet_REall$rmsk=0
+ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$V0%in%rmsk,'rmsk']=1
+ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$rmsk==0,]
+ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REall[duplicated(ADAR_2_RZR_dedup_fltanosnphet_REall)==F,]
+
+ADAR_2_RZR_dedup_fltanosnphet_REall.GR <- GRanges(seqnames = as.character(ADAR_2_RZR_dedup_fltanosnphet_REall$chr), ranges=IRanges(start = as.numeric(ADAR_2_RZR_dedup_fltanosnphet_REall$coordinate), end = as.numeric(ADAR_2_RZR_dedup_fltanosnphet_REall$coordinate)),strand = ADAR_2_RZR_dedup_fltanosnphet_REall$strand,V0=ADAR_2_RZR_dedup_fltanosnphet_REall$V0, ifRNAE=ADAR_2_RZR_dedup_fltanosnphet_REall$ifRNAE )
+
+remove(a,b,c,aa,bb,cc,C3,qh,sh,xo)
+```
+
+
+**Use locations from UCSC Repeats track**
+
+Do not remove locations in Alu regions
+
+```{r include=T ,echo=F,warning=F,eval=T}
+# ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REallogJX
+
+
+repeats_GRCh37=repeats_GRCh37og
+alu=grep('Alu',repeats_GRCh37$V4)
+repeats_GRCh37=repeats_GRCh37[-alu,]
+alu_GRCh37=repeats_GRCh37[alu,]
+
+mir=grep('MIR',repeats_GRCh37$V4)
+repeats_GRCh37=repeats_GRCh37[-mir,]
+mir_GRCh37=repeats_GRCh37[mir,]
+
+######
+repeats_GRCh37=repeats_GRCh37[c('V1','V2','V3','V4')];#colnames(repeats_GRCh37)=c('chrom','chromStart','chromEnd','name')
+Smplrepeats_GRCh37=Smplrepeats_GRCh37[,c('chrom','chromStart','chromEnd','name')];colnames(Smplrepeats_GRCh37)=c('V1','V2','V3','V4')
+repeats_GRCh37=rbind(Smplrepeats_GRCh37,repeats_GRCh37)
+#####
+
+
+repeats_GRCh37.GR <- GRanges(seqnames = as.character(repeats_GRCh37$V1), ranges=IRanges(start = as.numeric(repeats_GRCh37$V2), end = as.numeric(repeats_GRCh37$V3)),strand = "*" ,type=repeats_GRCh37$V4)
+
+        gr =ADAR_2_RZR_dedup_fltanosnphet_REall.GR;
+        gr2=repeats_GRCh37.GR
+        xo=as.data.frame(GenomicRanges::findOverlaps(gr,gr2,type = "any",ignore.strand=T))
+
+        qh=as.data.frame(gr[xo$queryHits],row.names = NULL)
+        sh=as.data.frame(gr2[xo$subjectHits],row.names = NULL)
+# View(OL_1[OL_1$V2%in%qh$end,])
+        qhsh=cbind(qh,sh)
+
+        repeats=unique(qh$V0)
+
+#############
+a=unique(OL3_1[,'V0'])
+  a=a[is.na(a)==F]
+b=unique(ADAR_2_RZR_dedup_fltanosnphet_REall$V0)
+  b=b[is.na(b)==F]
+c=unique(qh$V0)
+  c=c[is.na(c)==F]
+
+OVLG_all=unique(c(a,b,c))
+aa=OVLG_all%in%a
+bb=OVLG_all%in%b
+cc=OVLG_all%in%c
+C3=cbind(aa,bb,cc)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','GIREMI sites','Simplerepeats')
+{vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c( "red","blue","green4","orange",'green'))
+text(2,-2.5,'Remove All sites that Overlap\n with Repeat Regions',cex=.7)
+}
+
+GIREMIhit=rownames(C3[C3[,'Example_Data']==T&C3[,'GIREMI sites']==T&C3[,'Simplerepeats']==F,])
+GIREMImiss=rownames(C3[C3[,'Example_Data']==F&C3[,'GIREMI sites']==T&C3[,'Simplerepeats']==F,])
+filterhit=rownames(C3[C3[,'Example_Data']==T&C3[,'GIREMI sites']==F&C3[,'Simplerepeats']==T,])
+filtermiss=rownames(C3[C3[,'Example_Data']==F&C3[,'GIREMI sites']==T&C3[,'Simplerepeats']==T,])
+allhit=rownames(C3[C3[,'Example_Data']==T&C3[,'GIREMI sites']==T&C3[,'Simplerepeats']==T,])
+
+
+alal=OL3_1[OL3_1$V0%in%allhit,]
+alalqh=qh[qh$V0%in%allhit,]
+alalqhsh=qhsh[qhsh$V0%in%allhit,]
+aaa=OL3_1[OL3_1$V0%in%GIREMIhit,]
+aaaX=ADAR_2_RZR_dedup_fltanosnphet_REallx[ADAR_2_RZR_dedup_fltanosnphet_REallx$V0%in%GIREMIhit,]
+### 8 removed for low editing Ratio
+
+
+bbb=OL3_1[OL3_1$V0%in%filterhit,]
+bbbx=qhsh[qhsh$V0%in%filtermiss,]
+```
+
+```{r include=F ,echo=F,warning=F,eval=T}
+#############
+x=ADAR_2_RZR_dedup_fltanosnphet_REall
+
+x$filter=NA
+x[x$V0%in%(OVLG_all[C3[,'Example_Data']==T&C3[,'GIREMI sites']==F&C3[,'Simplerepeats']==F]),'filter']='Example_Data_only'
+x[x$V0%in%(OVLG_all[C3[,'Example_Data']==T&C3[,'GIREMI sites']==T&C3[,'Simplerepeats']==F]),'filter']='Example_Data + GIREMI_Sites'
+x[x$V0%in%(OVLG_all[C3[,'Example_Data']==F&C3[,'GIREMI sites']==T&C3[,'Simplerepeats']==F]),'filter']='GIREMI_Sites_only'
+x[x$V0%in%(OVLG_all[C3[,'Example_Data']==F&C3[,'GIREMI sites']==T&C3[,'Simplerepeats']==T]),'filter']='GIREMI_sites + Simplerepeats'
+
+
+# colnames(ADAR_2_RZR_dedup_fltanosnphet_REallx)
+x=x[,c("chr","coordinate","strand","gene","ifSNP","ifRNAE","filter","reference_base","major_base","major_count","tot_count","Editing_Count","editing_ratio","MI","pvalue_MI","ifNEG","RNAE_t","A","C","G","T")]
+
+write.table(x,file=("./data/GIREMI_Output_SimplerepeatsFilter.txt"), sep = "\t", row.names = FALSE, col.names = T, append = F, quote= FALSE)
+
+```
+data_table:
+[GIREMI_Output_RepeatMaskerFilter.txt](./data/GIREMI_Output_RepeatMaskerFilter.txt)   
+<br>  
+
+```{r include=F ,echo=F,warning=F,eval=T}
+
+###################
+
+ADAR_2_RZR_dedup_fltanosnphet_REall$repeats=0
+ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$V0%in%repeats,'repeats']=1
+ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$repeats==0,]
+ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REall[duplicated(ADAR_2_RZR_dedup_fltanosnphet_REall)==F,]
+
+ADAR_2_RZR_dedup_fltanosnphet_REall.GR <- GRanges(seqnames = as.character(ADAR_2_RZR_dedup_fltanosnphet_REall$chr), ranges=IRanges(start = as.numeric(ADAR_2_RZR_dedup_fltanosnphet_REall$coordinate), end = as.numeric(ADAR_2_RZR_dedup_fltanosnphet_REall$coordinate)),strand = ADAR_2_RZR_dedup_fltanosnphet_REall$strand,V0=ADAR_2_RZR_dedup_fltanosnphet_REall$V0, ifRNAE=ADAR_2_RZR_dedup_fltanosnphet_REall$ifRNAE )
+
+remove(a,b,c,aa,bb,cc,C3,qh,sh,xo)
+```
+
+
+```{r include=F ,echo=F,warning=F,eval=F}
+# ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REallogJX
+
+# unique(Smplrepeats_GRCh37og$name)
+
+Smplrepeats_GRCh37.GR <- GRanges(seqnames = as.character(Smplrepeats_GRCh37$chrom), ranges=IRanges(start = as.numeric(Smplrepeats_GRCh37$chromStart), end = as.numeric(Smplrepeats_GRCh37$chromEnd)),strand = '*' ,type=Smplrepeats_GRCh37$name)
+
+        gr =ADAR_2_RZR_dedup_fltanosnphet_REall.GR;
+        gr2=Smplrepeats_GRCh37.GR
+        xo=as.data.frame(GenomicRanges::findOverlaps(gr,gr2,type = "any",ignore.strand=T))
+
+        qh=as.data.frame(gr[xo$queryHits],row.names = NULL)
+        sh=as.data.frame(gr2[xo$subjectHits],row.names = NULL)
+# View(OL_1[OL_1$V2%in%qh$end,])
+        qhsh=cbind(qh,sh)
+                Smplrepeats=unique(qh$V0)
+
+#############
+a=unique(OL3_1[,'V0'])
+b=unique(ADAR_2_RZR_dedup_fltanosnphet_REall$V0)
+  b=b[is.na(b)==F]
+c=unique(qh$V0)
+  c=c[is.na(c)==F]
+
+OVLG_all=unique(c(a,b,c))
+aa=OVLG_all%in%a
+bb=OVLG_all%in%b
+cc=OVLG_all%in%c
+C3=cbind(aa,bb,cc)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','GIREMI sites','Smplrepeats')
+{vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c( "red","blue","green4","orange",'green'))
+text(2,-2.5,'Remove All sites that Overlap\n with Splice junctions',cex=.7)
+}
+
+GIREMIhit=rownames(C3[C3[,'Example_Data']==T&C3[,'GIREMI sites']==T&C3[,'Smplrepeats']==F,])
+GIREMImiss=rownames(C3[C3[,'Example_Data']==F&C3[,'GIREMI sites']==T&C3[,'Smplrepeats']==F,])
+filterhit=rownames(C3[C3[,'Example_Data']==T&C3[,'GIREMI sites']==F&C3[,'Smplrepeats']==T,])
+filtermiss=rownames(C3[C3[,'Example_Data']==F&C3[,'GIREMI sites']==T&C3[,'Smplrepeats']==T,])
+allhit=rownames(C3[C3[,'Example_Data']==T&C3[,'GIREMI sites']==T&C3[,'Smplrepeats']==T,])
+
+
+alal=OL3_1[OL3_1$V0%in%allhit,]
+alalqh=qh[qh$V0%in%allhit,]
+alalqhsh=qhsh[qhsh$V0%in%allhit,]
+aaa=OL3_1[OL3_1$V0%in%GIREMIhit,]
+aaaX=ADAR_2_RZR_dedup_fltanosnphet_REallx[ADAR_2_RZR_dedup_fltanosnphet_REallx$V0%in%GIREMIhit,]
+### 8 removed for low editing Ratio
+
+
+bbb=OL3_1[OL3_1$V0%in%filterhit,]
+bbbx=qhsh[qhsh$V0%in%filtermiss,]
+
+
+
+
+###################
+
+ADAR_2_RZR_dedup_fltanosnphet_REall$Smplrepeats=0
+ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$V0%in%Smplrepeats,'Smplrepeats']=1
+ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$Smplrepeats==0,]
+ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REall[duplicated(ADAR_2_RZR_dedup_fltanosnphet_REall)==F,]
+
+
+ADAR_2_RZR_dedup_fltanosnphet_REall.GR <- GRanges(seqnames = as.character(ADAR_2_RZR_dedup_fltanosnphet_REall$chr), ranges=IRanges(start = as.numeric(ADAR_2_RZR_dedup_fltanosnphet_REall$coordinate), end = as.numeric(ADAR_2_RZR_dedup_fltanosnphet_REall$coordinate)),strand = ADAR_2_RZR_dedup_fltanosnphet_REall$strand,V0=ADAR_2_RZR_dedup_fltanosnphet_REall$V0 )
+
+remove(a,b,c,aa,bb,cc,C3,qh,sh,xo)
+```
+
+
+
+# Can we reproduce sites identified as RNA editing
+
+```{r include=T ,echo=F,warning=F,eval=T}
+
+#############
+a=unique(OL3_1[,'V0'])
+b=unique(ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$ifRNAE==0,'V0'])
+c=unique(ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$ifRNAE>0,'V0'])
+
+OVLG_all=unique(c(a,b,c))
+aa=OVLG_all%in%a
+bb=OVLG_all%in%b
+cc=OVLG_all%in%c
+C3=cbind(aa,bb,cc)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','GIREMI - Not RNAE','GIREMI - RNAE')
+{vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c( "red","blue","green4","orange",'green'))
+text(2,-2.5,'Remove All sites that Overlap\n with Splice junctions',cex=.7)
+}
+
+
+GIREMIhit=rownames(C3[C3[,'Example_Data']==T&C3[,'GIREMI - Not RNAE']==T&C3[,'GIREMI - RNAE']==F,])
+GIREMImiss=rownames(C3[C3[,'Example_Data']==F&C3[,'GIREMI - Not RNAE']==T&C3[,'GIREMI - RNAE']==F,])
+RNAEhit=rownames(C3[C3[,'Example_Data']==T&C3[,'GIREMI - Not RNAE']==F&C3[,'GIREMI - RNAE']==T,])
+RNAEmiss=rownames(C3[C3[,'Example_Data']==F&C3[,'GIREMI - Not RNAE']==F&C3[,'GIREMI - RNAE']==T,])
+allhit=rownames(C3[C3[,'Example_Data']==T&C3[,'GIREMI - Not RNAE']==T&C3[,'GIREMI - RNAE']==T,])
+
+alal=OL3_1[OL3_1$V0%in%allhit,]
+aaa=OL3_1[OL3_1$V0%in%GIREMIhit,]
+aaaX=ADAR_2_RZR_dedup_fltanosnphet_REallx[ADAR_2_RZR_dedup_fltanosnphet_REallx$V0%in%GIREMIhit,]
+
+bbb=OL3_1[OL3_1$V0%in%filterhit,]
+bbbx=qhsh[qhsh$V0%in%filtermiss,]
+
+ADAR_2_RZR_dedup_fltanosnphet_REallrex=ADAR_2_RZR_dedup_fltanosnphet_REall
+
+```
+
+
+```{r include=T ,echo=F,warning=F,eval=T}
+#############
+
+ADAR_2_RZR_dedup_fltanosnphet_REallx=ADAR_2_RZR_dedup_fltanosnphet_REall
+
+ADAR_2_RZR_dedup_fltanosnphet_REallx$filter=NA
+ADAR_2_RZR_dedup_fltanosnphet_REallx[ADAR_2_RZR_dedup_fltanosnphet_REallx$V0%in%(OVLG_all[C3[,'Example_Data']==T&C3[,'GIREMI - Not RNAE']==T&C3[,'GIREMI - RNAE']==F]),'filter']='Example_RNAE\nGIREMI_NotRNAE'
+ADAR_2_RZR_dedup_fltanosnphet_REallx[ADAR_2_RZR_dedup_fltanosnphet_REallx$V0%in%(OVLG_all[C3[,'Example_Data']==F&C3[,'GIREMI - Not RNAE']==T&C3[,'GIREMI - RNAE']==F]),'filter']='Example_NotIdent\nGIREMI_NotRNAE'
+ADAR_2_RZR_dedup_fltanosnphet_REallx[ADAR_2_RZR_dedup_fltanosnphet_REallx$V0%in%(OVLG_all[C3[,'Example_Data']==F&C3[,'GIREMI - Not RNAE']==F&C3[,'GIREMI - RNAE']==T]),'filter']='Example_NotIdent\nGIREMI_RNAE'
+ADAR_2_RZR_dedup_fltanosnphet_REallx[ADAR_2_RZR_dedup_fltanosnphet_REallx$V0%in%(OVLG_all[C3[,'Example_Data']==T&C3[,'GIREMI - Not RNAE']==F&C3[,'GIREMI - RNAE']==T]),'filter']='Example_RNAE\nGIREMI_RNAE'
+
+# ADAR_2_RZR_dedup_fltanosnphet_REallx=ADAR_2_RZR_dedup_fltanosnphet_REallx[ADAR_2_RZR_dedup_fltanosnphet_REallx$filter!='No loss',]
+
+# colnames(ADAR_2_RZR_dedup_fltanosnphet_REallx)
+x=ADAR_2_RZR_dedup_fltanosnphet_REallx[,c("chr","coordinate","strand","gene","ifSNP","ifRNAE","filter","reference_base","major_base","major_count","tot_count","Editing_Count","editing_ratio","MI","pvalue_MI","ifNEG","RNAE_t","A","C","G","T")]
+
+write.table(x,file=("./data/GIREMI_Output_afterAllFilter.txt"), sep = "\t", row.names = FALSE, col.names = T, append = F, quote= FALSE)
+
+```
+data_table:
+[GIREMI_Output_afterAllFilter.txt](./data/GIREMI_Output_afterAllFilters.txt)  
+<br>  
+
+
+```{r include=T ,echo=F,warning=F,eval=T}
+
+ggplot(ADAR_2_RZR_dedup_fltanosnphet_REallx, aes(x=filter, y=Editing_Count, fill=filter)) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+    geom_jitter(color="black", size=0.7, alpha=0.9) +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11)
+    ) +
+    ggtitle("Editing count") +
+    xlab("")+ylab("minor_count")+ylim(0,40)
+    # annotate('text',x=3,y=35,label="Averave values all under 2")+
+    # annotate('text',x=1,y=35,label="values > 2 were removed\nbecause editing freq <0.1")+
+    # annotate('text',x=2,y=35,label="Low values < 2 still kept because\nediting ratio > .1 \n average values lower because \nhigh in only one sample ")
+
+
+ggplot(ADAR_2_RZR_dedup_fltanosnphet_REallx, aes(x=filter, y=Editing_Count, fill=filter)) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+    geom_jitter(color="black", size=0.7, alpha=0.9) +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11)
+    ) +
+    ggtitle("editing_ratio") +
+    xlab("")+ylab("editing_ratio")#+ylim(0,40)+
+    # annotate('text',x=3,y=35,label="Averave values all under 2")+
+    # annotate('text',x=1,y=35,label="values > 2 were removed\nbecause editing freq <0.1")+
+    # annotate('text',x=2,y=35,label="Low values < 2 still kept because\nediting ratio > .1 \n average values lower because \nhigh in only one sample ")
+
+ggplot(ADAR_2_RZR_dedup_fltanosnphet_REallx, aes(x=filter, y=MI, fill=filter)) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+    geom_jitter(color="black", size=0.7, alpha=0.9) +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11)
+    ) +
+    ggtitle("MI") +
+    xlab("")+ylab("MI")#+ylim(0,40)+
+    # annotate('text',x=3,y=35,label="Averave values all under 2")+
+    # annotate('text',x=1,y=35,label="values > 2 were removed\nbecause editing freq <0.1")+
+    # annotate('text',x=2,y=35,label="Low values < 2 still kept because\nediting ratio > .1 \n average values lower because \nhigh in only one sample ")
+
+
+
+ggplot(ADAR_2_RZR_dedup_fltanosnphet_REallx, aes(x=filter, y=(pvalue_MI), fill=filter)) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+    geom_jitter(color="black", size=0.7, alpha=0.9) +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11)
+    ) +
+    ggtitle("pvalue_MI") +
+    xlab("")+ylab("pvalue_MI")#+ylim(0,40)+
+    # annotate('text',x=3,y=35,label="Averave values all under 2")+
+    # annotate('text',x=1,y=35,label="values > 2 were removed\nbecause editing freq <0.1")+
+    # annotate('text',x=2,y=35,label="Low values < 2 still kept because\nediting ratio > .1 \n average values lower because \nhigh in only one sample ")
+
+
+ADAR_2_RZR_dedup_fltanosnphet_REallxx=ADAR_2_RZR_dedup_fltanosnphet_REallx[ADAR_2_RZR_dedup_fltanosnphet_REallx$pvalue_MI>-1, ]
+
+ggplot(ADAR_2_RZR_dedup_fltanosnphet_REallxx, aes(x=filter, y=-log10(pvalue_MI), fill=filter)) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+    geom_jitter(color="black", size=0.7, alpha=0.9) +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11)
+    ) +
+    ggtitle("pvalue_MI") +
+    xlab("")+ylab("pvalue_MI")#+ylim(0,40)+
+    # annotate('text',x=3,y=35,label="Averave values all under 2")+
+    # annotate('text',x=1,y=35,label="values > 2 were removed\nbecause editing freq <0.1")+
+    # annotate('text',x=2,y=35,label="Low values < 2 still kept because\nediting ratio > .1 \n average values lower because \nhigh in only one sample ")
+
+
+
+
+# ggplot(ADAR_2_RZR_dedup_fltanosnphet_REallx, aes(x=filter, y=ifRNAE, fill=filter)) +
+#     geom_boxplot(outlier.shape = NA) +
+#     scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+#     geom_jitter(color="black", size=0.7, alpha=0.9) +
+#     theme(
+#       legend.position="none",
+#       plot.title = element_text(size=11)
+#     ) +
+#     ggtitle("ifRNAE") +
+#     xlab("")+ylab("ifRNAE")#+ylim(0,40)+
+#     # annotate('text',x=3,y=35,label="Averave values all under 2")+
+#     # annotate('text',x=1,y=35,label="values > 2 were removed\nbecause editing freq <0.1")+
+#     # annotate('text',x=2,y=35,label="Low values < 2 still kept because\nediting ratio > .1 \n average values lower because \nhigh in only one sample ")
+
+```
+
+
+
+```{r include=T ,echo=F,warning=F,eval=F}
+a=OL3$V0
+b=c(OL3[OL3$DP.1_dedup_flt>0&(is.na(OL3$DP.1_dedup_flt)==F),"V0"],OL3[OL3$DP.2_dedup_flt>0&(is.na(OL3$DP.2_dedup_flt)==F),"V0"]);
+c=c(OL3[OL3$DP.1_dedup>0&(is.na(OL3$DP.1_dedup)==F),"V0"],OL3[OL3$DP.2_dedup>0&(is.na(OL3$DP.2_dedup)==F),"V0"]);
+
+OVLG_all=unique(c(a,b,c))
+  OVLG_all=OVLG_all[is.na(OVLG_all)==F]
+
+aa=OVLG_all%in%a
+bb=OVLG_all%in%b
+cc=OVLG_all%in%c
+# d=OVLG_all%in%d
+
+C3=cbind(aa,bb,cc)
+
+OL3=OL3
+OL3$filter=NA
+OL3[OL3$V0%in%(OVLG_all[C3[,'aa']==T&C3[,'bb']==F&C3[,'cc']==T]),'filter']='lost by Freebayes minimum count filter'
+OL3[OL3$V0%in%(OVLG_all[C3[,'aa']==T&C3[,'bb']==T&C3[,'cc']==T]),'filter']='No loss'
+OL3[OL3$V0%in%(OVLG_all[C3[,'aa']==T&C3[,'bb']==F&C3[,'cc']==F]),'filter']='Not Identified'
+
+# OL3=OL3[OL3$filter!='No loss',]
+ggplot(OL3, aes(x=filter, y=avgV4, fill=filter)) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+    geom_jitter(color="black", size=0.7, alpha=0.9) +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11)
+    ) +
+    # ggtitle("Editing count") +
+    xlab("")+ylab("Average Editing count (Example Data)")+ylim(0,40)+
+    annotate('text',x=3,y=35,label="Averave values all under 2")+
+    annotate('text',x=1,y=35,label="values > 2 were removed\nbecause editing freq <0.1")+
+    annotate('text',x=2,y=35,label="Low values < 2 still kept because\nediting ratio > .1 \n average values lower because \nhigh in only one sample ")
+
+
+# ggplot(OL3, aes(x=avgV4,line=filter,color=filter,file=filter)) +
+#     geom_density() +
+#     scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+#     theme(
+#       plot.title = element_text(size=11)
+#     ) +
+#     # ggtitle("Editing count") +
+#     xlab("")+ylab("Editing count (Example Data)")
+
+
+# OL3=OL3[OL3$filter!='No loss',]
+ggplot(OL3, aes(x=filter, y=avgV5, fill=filter)) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+    geom_jitter(color="black", size=0.7, alpha=0.9) +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11)
+    ) +
+    # ggtitle("Editing count") +
+    xlab("")+ylab("Average count (Example Data)")
+
+
+```
+
+
+
+```{r include=T ,echo=F,warning=F,eval=F}
+# ADAR_2_RZR_dedup_fltanosnphet_REall=ADAR_2_RZR_dedup_fltanosnphet_REallrex
+ADAR_2_RZR_dedup_fltanosnphet_REallrex=ADAR_2_RZR_dedup_fltanosnphet_REall[ADAR_2_RZR_dedup_fltanosnphet_REall$ifRNAE>0,]
+
+ADAR_2_RZR_dedup_fltanosnphet_REallrex$Example_data=0
+ADAR_2_RZR_dedup_fltanosnphet_REallrex[ADAR_2_RZR_dedup_fltanosnphet_REallrex$V0%in%OL3_1$V0,'Example_data']=1
+ADAR_2_RZR_dedup_fltanosnphet_REallrex$diffratio=round(ADAR_2_RZR_dedup_fltanosnphet_REallrex$editing_ratio/ADAR_2_RZR_dedup_fltanosnphet_REallrex$major_ratio,4)
+ADAR_2_RZR_dedup_fltanosnphet_REallrex=merge(ADAR_2_RZR_dedup_fltanosnphet_REallrex,OL3_1[,c('V0','V4.1','V5.1','editing_ratio.1','DE','filter')],by='V0',all.x=T)
+
+#############
+a=unique(OL3_1[,'V0'])
+b=unique(ADAR_2_RZR_dedup_fltanosnphet_REallrex[,'V0'])
+c=unique(ADAR_2_RZR_dedup_fltanosnphet_REallrex[ADAR_2_RZR_dedup_fltanosnphet_REallrex$minor_count>1,'V0'])
+
+OVLG_all=unique(c(a,b,c))
+aa=OVLG_all%in%a
+bb=OVLG_all%in%b
+cc=OVLG_all%in%c
+C3=cbind(aa,bb,cc)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('Example_Data','GIREMI - Editng sites','GIREMI - RNAE>1')
+{vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c( "red","blue","green4","orange",'green'))
+text(2,-2.5,'Remove All sites that Overlap\n with Splice junctions',cex=.7)
+}
+
+
+```
+
+```{r include=F ,echo=F,warning=F,eval=F}
+
+ADAR_RE=merge(ADAR_1_RZR_dedup_fltanosnphet_REall[,c('V0','ifSNP','ifRNAE','gene','strand','major_count','tot_count','minor_count','MI','estimated_allelic_ratio')],ADAR_2_RZR_dedup_fltanosnphet_REall[,c('V0','ifSNP','ifRNAE','gene','strand','major_count','tot_count','minor_count','MI','estimated_allelic_ratio')],by='V0',suffix=c('_1','_2'),all=T)
+
+ADAR_RE=as.data.frame(ADAR_RE)
+ADAR_RE=separate(ADAR_RE,col = 'V0',into = c('chr','start'),sep=":",remove=F)
+ADAR_RE$strand=NA
+ADAR_RE$gene=NA
+ADAR_RE$ifRNAE=NA
+
+for (n in 1:nrow(ADAR_RE)) {
+  x=paste(ADAR_RE[n,c('strand_1',"strand_2")],collapse="_")
+ x=gsub('NA_',"",x)
+ x=gsub('_NA',"",x)
+   x=gsub('+_+',"+",x)
+  x=gsub('-_-',"-",x)
+ ADAR_RE[n,'strand']=x
+
+   x=paste(ADAR_RE[n,c('gene_1',"gene_2")],collapse="_")
+ x=gsub('NA_',"",x)
+ x=gsub('_NA',"",x)
+ ADAR_RE[n,'gene']=x
+
+    x=paste(ADAR_RE[n,c('ifRNAE_1',"ifRNAE_2")],collapse="_")
+ x=gsub('NA_',"",x)
+ x=gsub('_NA',"",x)
+  x=gsub('1_1',"1",x)
+  x=gsub('2_2',"2",x)
+ ADAR_RE[n,'ifRNAE']=x
+}
+ADAR_RE$tot_count_Avg=rowMeans(ADAR_RE[,c('tot_count_1','tot_count_2')],na.rm=T)
+ADAR_RE$major_count_Avg=rowMeans(ADAR_RE[,c('major_count_1','major_count_2')],na.rm=T)
+ADAR_RE$minor_count_Avg=rowMeans(ADAR_RE[,c('minor_count_1','minor_count_2')],na.rm=T)
+ADAR_RE$MI_Avg=rowMeans(ADAR_RE[,c('MI_1','MI_2')],na.rm=T)
+
+   # ggplot(ADAR_RE,aes(fill=ifRNAE,x=1))+geom_bar(position="stack")
+
+   # ADAR_RE$ifRNAE=gsub("0_0","0",ADAR_RE$ifRNAE)
+   # ADAR_RE$ifRNAE=gsub("0_1","1",ADAR_RE$ifRNAE)
+   # ADAR_RE$ifRNAE=gsub("1_0","1",ADAR_RE$ifRNAE)
+   #    ADAR_RE$ifRNAE=gsub("1_2","2",ADAR_RE$ifRNAE)
+   #    ADAR_RE$ifRNAE=gsub("2_0","2",ADAR_RE$ifRNAE)
+   #    ADAR_RE$ifRNAE=as.numeric(ADAR_RE$ifRNAE)
+
+
+      ADAR_RE[is.na(ADAR_RE$ifRNAE_1) ,'ifRNAE_1'] =0
+      ADAR_RE[is.na(ADAR_RE$ifRNAE_2) ,'ifRNAE_2'] =0
+
+  ADAR_RE$ifRNAE=0
+    ADAR_RE[((ADAR_RE$ifRNAE_1>0)|(ADAR_RE$ifRNAE_2>0)),'ifRNAE']=1
+  ADAR_RE[ADAR_RE$ifRNAE_1==2|ADAR_RE$ifRNAE_2==2,'ifRNAE']=2
+
+  xx=ADAR_RE;xx$ifRNAE=as.character(xx$ifRNAE)
+      # ggplot(xx,aes(fill=ifRNAE,x=1))+geom_bar(position="stack")
+
+
+ # ADAR_RE[duplicated(ADAR_RE$V0),]
+
+ADAR_RE.GR <- GRanges(seqnames = as.character(ADAR_RE$chr), ranges=IRanges(start = as.numeric(ADAR_RE$start), end = as.numeric(ADAR_RE$start)),strand = '*',V0=ADAR_RE$V0,gene=ADAR_RE$gene,ifRNAE=ADAR_RE$ifRNAE )
+
+
+```
+
+```{r include=F ,echo=F,warning=F,eval=F}
+OL_mastertable_OG$V0=paste0(OL_mastertable_OG$chr,":",(as.numeric(as.character(OL_mastertable_OG$pos))-0))
+
+a=unique(c(ADAR_RE$V0))
+# b=unique(OL_mastertable_OG[(OL_mastertable_OG$chr%in%'chr2'),'V0'])
+b=unique(OL_mastertable_OG[,'V0'])
+G=setdiff(a,b)###in RE not in Mastertable
+D=setdiff(b,a)###in mastertable not in RE
+
+aEdit=unique(c(ADAR_RE[ADAR_RE$ifRNAE>0,'V0']))
+
+anotEdit=unique(c(ADAR_RE[ADAR_RE$ifRNAE==0,'V0']))
+I=intersect(a,b)
+Iedit=intersect(aEdit,b)
+Inotedit=intersect(anotEdit,b)
+
+OL_mastertable_OG$KD_mean_Editing_count=OL_mastertable_OG$KD_editing_ratio*OL_mastertable_OG$KD_mean_coverage
+
+criteria=c("avgV4","V0",'V4.1','V4.2','KD_editing_ratio','KD_mean_coverage')
+criteria=c("KD_mean_Editing_count","KD_editing_ratio",'V0')
+# boxplot(OL3[OL3$V0%in%hit,criteria],OL3[OL3$V0%in%miss,criteria],names=c('hit','miss'),main=criteria)
+OL_mastertable_OG=OL_mastertable_OG[duplicated(OL_mastertable_OG)==F,]
+
+missplot2=as.data.frame(OL_mastertable_OG[OL_mastertable_OG$V0%in%D,criteria]);missplot2$Catagroy='miss';colnames(missplot2)[1]=criteria[1]
+missplot2=missplot2[duplicated(missplot2)==F,]
+
+hitplot2=as.data.frame(OL_mastertable_OG[OL_mastertable_OG$V0%in%I,criteria]);
+hitplot2$Catagroy='hit';colnames(hitplot2)[1]=criteria[1]
+hitplot2=hitplot2[duplicated(hitplot2)==F,]
+
+hitplot2_edit=as.data.frame(OL_mastertable_OG[OL_mastertable_OG$V0%in%Iedit,criteria]);
+hitplot2_edit$Catagroy='hit_edit';colnames(hitplot2_edit)[1]=criteria[1]
+hitplot2_edit=hitplot2_edit[duplicated(hitplot2_edit)==F,]
+
+hitplot2_notedit=as.data.frame(OL_mastertable_OG[OL_mastertable_OG$V0%in%Inotedit,criteria]);
+hitplot2_notedit$Catagroy='hit_notEdit';colnames(hitplot2_notedit)[1]=criteria[1]
+hitplot2_notedit=hitplot2_notedit[duplicated(hitplot2_notedit)==F,]
+
+
+p=rbind(missplot2,hitplot2)
+ggplot(p, aes(x=Catagroy, y=p[,1], fill=Catagroy)) +
+    stat_boxplot(outlier.shape=NA) +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+    geom_jitter(color="black", size=0.7, alpha=0.9) +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11)
+    ) +
+    # ggtitle("Editing count") +
+    xlab("")+ylab(criteria)
+
+# p=rbind(missplot2,hitplot2_edit,hitplot2_notedit)
+# ggplot(p, aes(x=Catagroy, y=p[,1], fill=Catagroy)) +
+    # stat_boxplot(outlier.shape=NA) +
+    # scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+    # geom_jitter(color="black", size=0.7, alpha=0.9) +
+    # theme(
+    #   legend.position="none",
+    #   plot.title = element_text(size=11)
+    # ) +
+    # # ggtitle("Editing count") +
+    # xlab("")+ylab(criteria)
+```
+```{r include=F ,echo=F,warning=F,eval=F}
+#coverage matches but ratio is slightly off so that Editing coverage is slightly off
+merge(OL_mastertable_OG[,c("V0",'KD_editing_ratio','KD_mean_coverage')],OL3[,c("V0",'V4.1','V4.2',"avgV4",'V5.1','V5.2',"avgV5")],by="V0")
+
+missplot2_high=missplot2[missplot2$KD_mean_Editing_count>4,]
+hitplot2_notedit_high=hitplot2_notedit[hitplot2_notedit$KD_mean_Editing_count>5,]
+hitplot2_edit_high=hitplot2_edit[hitplot2_edit$KD_mean_Editing_count>5,]
+
+### check MI distrabution
+
+ggplot()+geom_freqpoly(aes(ADAR_1_RZR_dedup_fltanosnphet_REall[ADAR_1_RZR_dedup_fltanosnphet_REall$ifRNAE>=0,'MI'],bins=.1))+
+  geom_freqpoly(aes(ADAR_1_RZR_dedup_fltanosnphet_REall[ADAR_1_RZR_dedup_fltanosnphet_REall$ifRNAE==1,'MI'],bins=.1),color="red")+
+  geom_freqpoly(aes(ADAR_1_RZR_dedup_fltanosnphet_REall[ADAR_1_RZR_dedup_fltanosnphet_REall$ifRNAE==2,'MI'],bins=.1),color="blue")
+
+xx=ADAR_1_RZR_dedup_fltanosnphet_REall;xx$ifRNAE=as.character(xx$ifRNAE)
+ggplot(xx)+geom_density(aes(MI,color=ifRNAE))
+ggplot(xx)+geom_density(aes(pvalue_MI,color=ifRNAE))
+#
+# View(ADAR_1_RZR_dedup_fltanosnphet_REallx[ADAR_1_RZR_dedup_fltanosnphet_REallx$V0%in%missplot2_high$V0,])
+# View(ADAR_2_RZR_dedup_fltanosnphet_REallx[ADAR_2_RZR_dedup_fltanosnphet_REallx$V0%in%missplot2_high$V0,])
+# View(ADAR_RE[ADAR_RE$V0%in%missplot2_high$V0,])
+
+ggplot()+xlab("MI")+
+  geom_freqpoly(aes(ADAR_RE[ADAR_RE$V0%in%hitplot2_notedit_high$V0,'MI_1'],bins=.1),color="blue")+
+  geom_freqpoly(aes(ADAR_RE[ADAR_RE$V0%in%hitplot2_notedit_high$V0,'MI_2'],bins=.1),color="red")#+
+    geom_freqpoly(aes(ADAR_RE[ADAR_RE$V0%in%hitplot2_notedit$V0,'MI_Avg'],bins=.1),color="black")
+
+### check if RNAE=1or2
+
+   xx=ADAR_RE[ADAR_RE$V0%in%hitplot2_notedit_high$V0,]
+   xx$ifRNAE=as.character(xx$ifRNAE)
+   # ggplot(xx,aes(fill=ifRNAE,x=1))+geom_bar(position="stack")
+
+######check if hit _ noEdit are not cloase in space to another mutation
+ADAR_RE_loc=rbind(ADAR_1_RZR_dedup_fltanosnphet_REall[,c('V0','chr','coordinate','strand')],ADAR_2_RZR_dedup_fltanosnphet_REall[,c('V0','chr','coordinate','strand')])
+ADAR_RE_loc=ADAR_RE_loc[duplicated(ADAR_RE_loc)==F,]
+
+pp=rbind(hitplot2_notedit,hitplot2_edit)
+
+pp$numberdist=NA
+for (d in 1:nrow(pp)) {
+  id=pp[d,'V0']
+  id_loc=ADAR_RE_loc[ADAR_RE$V0%in%id,]
+  l=ADAR_RE_loc[ADAR_RE_loc$chr==id_loc$chr,]
+  pp[d,'numberdist']=nrow(l[abs(l$coordinate-id_loc$coordinate)<300,])-1
+  pp[d,'numberdist']=sum(nrow(l[abs(l$coordinate-id_loc$coordinate)<300,])>1)
+}
+ggplot(pp,aes(x=numberdist,color=Catagroy))+geom_density()
+
+m=matrix(nrow=1,ncol=2);colnames(m)=c('hit_edit','hit_notEdit')
+          # m[1,1]=sum(pp[pp$Catagroy%in%c('hit_edit'),'numberdist']>0)/sum(pp[pp$Catagroy%in%c('hit_edit'),'numberdist']==0)
+          # m[1,2]=sum(pp[pp$Catagroy%in%c('hit_notEdit'),'numberdist']>0)/sum(pp[pp$Catagroy%in%c('hit_notEdit'),'numberdist']==0)
+          m[1,1]=sum(pp[pp$Catagroy%in%c('hit_edit'),'numberdist']>0)/nrow(pp[pp$Catagroy%in%c('hit_edit'),])
+          m[1,2]=sum(pp[pp$Catagroy%in%c('hit_notEdit'),'numberdist']>0)/nrow(pp[pp$Catagroy%in%c('hit_notEdit'),])
+
+barplot(m,xlab='Percent Editing sites with close edits')
+
+###########
+View(ADAR_RE[ADAR_RE$V0%in%hitplot2_notedit$V0,])
+
+
+xxx
+# OL_mastertable_OG[duplicated(OL_mastertable_OG$V0),]
+missplot2[missplot2$V0%in%intersect(ADAR_1_RZR_dedup_fltanosnphet_vcfall$V0,missplot2[missplot2$KD_mean_Editing_count>5,"V0"]),]
+
+missplot2[missplot2$V0%in%intersect(ADAR_1_RZR_dedup_fltanosnphet_vcfall$V0,missplot2[missplot2$KD_mean_Editing_count>0,"V0"]),]
+
+```
+
+
+
+
+```{r include=F ,echo=F,warning=F,eval=F}
+
+
+
+        gr =ADAR_RE.GR;
+        gr2=rmsk_GRCm37.GR
+        xo=as.data.frame(GenomicRanges::findOverlaps(gr,gr2,type = "any",ignore.strand=T))
+
+        qh=as.data.frame(gr[xo$queryHits],row.names = NULL)
+        sh=as.data.frame(gr2[xo$subjectHits],row.names = NULL)
+
+        rmsk=unique(qh$V0)
+
+
+#############
+a=unique(c(ADAR_1_RZR_dedup_fltanosnphet_REall$V0,ADAR_2_RZR_dedup_fltanosnphet_REall$V0))
+# b=unique(OL_mastertable[(OL_mastertable$chr%in%'chr2'),'V0'])
+        b=unique(OL_mastertable[,'V0'])
+
+c=Repeat
+OVLG_all=unique(c(a,b,c))
+aa=OVLG_all%in%a
+bb=OVLG_all%in%b
+cc=OVLG_all%in%c
+C3=cbind(aa,bb,cc)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('GIREMI','Example_DE','rmsk')
+vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c( "blue","orange",'green'))
+#############
+
+```
+
+```{r include=F ,echo=F,warning=F,eval=F}
+
+        gr =ADAR_RE.GR;
+        gr2=repeats_GRCh37.GR
+        xo=as.data.frame(GenomicRanges::findOverlaps(gr,gr2,type = "any",ignore.strand=T))
+
+        qh=as.data.frame(gr[xo$queryHits],row.names = NULL)
+        sh=as.data.frame(gr2[xo$subjectHits],row.names = NULL)
+
+                Repeat2=unique(qh$V0)
+
+                #############
+a=unique(c(ADAR_1_RZR_dedup_fltanosnphet_REall$V0,ADAR_2_RZR_dedup_fltanosnphet_REall$V0))
+# b=unique(OL_mastertable[(OL_mastertable$chr%in%'chr2'),'V0'])
+b=unique(OL_mastertable[,'V0'])
+c=Repeat
+d=Repeat2
+
+OVLG_all=unique(c(a,b,d))
+aa=OVLG_all%in%a
+bb=OVLG_all%in%b
+cc=OVLG_all%in%c
+dd=OVLG_all%in%d
+C3=cbind(aa,bb,cc,dd)
+C3=cbind(aa,bb,dd)
+
+# rownames(C3)=OVLG_all;colnames(C3)=c('GIREMI','Example_DE','Repeats','Reapeats2')
+rownames(C3)=OVLG_all;colnames(C3)=c('GIREMI','Example_DE','Reapeats2')
+vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c( "blue","orange","green","red"))
+#############
+
+```
+
+```{r include=F ,echo=F,warning=F,eval=F}
+
+
+
+        gr =ADAR_RE.GR;
+        gr2=OL
+        xo=as.data.frame(GenomicRanges::findOverlaps(gr,gr2,type = "any",ignore.strand=T))
+
+        qh=as.data.frame(gr[xo$queryHits],row.names = NULL)
+        sh=as.data.frame(gr2[xo$subjectHits],row.names = NULL)
+
+        rmsk=unique(qh$V0)
+
+
+#############
+a=unique(c(ADAR_1_RZR_dedup_fltanosnphet_REall$V0,ADAR_2_RZR_dedup_fltanosnphet_REall$V0))
+# b=unique(OL_mastertable[(OL_mastertable$chr%in%'chr2'),'V0'])
+b=unique(OL_mastertable[,'V0'])
+c=Repeat
+OVLG_all=unique(c(a,b,c))
+aa=OVLG_all%in%a
+bb=OVLG_all%in%b
+cc=OVLG_all%in%c
+C3=cbind(aa,bb,cc)
+
+rownames(C3)=OVLG_all;colnames(C3)=c('GIREMI','Example_DE','rmsk')
+vennDiagram(vennCounts(C3),
+            cex=1,circle.col = c( "blue","orange",'green'))
+#############
+
+```
